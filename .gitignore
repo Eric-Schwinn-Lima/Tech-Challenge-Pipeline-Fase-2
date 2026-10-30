@@ -1,0 +1,43 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+data/bronze/
+data/silver/
+data/gold/
+data/observability/
+data/quarantine/
+.terraform/
+terraform.tfstate*
+*.tfstate.backup
+cloud/lambda/function.zip
+data/exports_raw/*.csv
+!data/exports_raw/dicionario.csv
+data/source/*.csv
+config/category_mappings.json
+cloud/terraform/tfplan
+
+# Terraform - arquivos locais e sensíveis
+**/terraform.tfvars
+**/*.auto.tfvars
+*.tfplan
+*.tfstate
+*.tfstate.*
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Dados originais compactados
+data/exports_raw/*.zip
+
+# Python - arquivos gerados
+*.egg-info/
+build/
+dist/
+
+# Arquivos temporários
+*.tmp
+*.bak

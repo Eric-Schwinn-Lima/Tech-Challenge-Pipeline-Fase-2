@@ -1,0 +1,28 @@
+{
+  "evidence_type": "documented_quality_summary",
+  "execution_mode": "local",
+  "run_id": "20261029T003707Z_763b68ad",
+  "status": "PASSED",
+  "checks_total": 61,
+  "blocking_failures": 0,
+  "join_rates": {
+    "alunos_to_municipio_comparable_networks": 0.9982,
+    "municipio_to_uf": 0.9864,
+    "municipal_target_coverage_applicable_years": 0.9824,
+    "state_target_coverage_applicable_years": 1.0,
+    "national_target_coverage_applicable_years": 1.0
+  },
+  "invalid_sampling_weights": {
+    "count": 312,
+    "rate": 0.000343,
+    "action": "excluded_from_weighted_calculation"
+  },
+  "unmapped_dictionary_codes_in_checked_columns": 0,
+  "streaming_simulated": {
+    "received": 4,
+    "valid": 2,
+    "quarantined": 1,
+    "duplicates_removed": 1
+  },
+  "note": "PASSED refere-se às regras locais implementadas; não certifica completude integral dos microdados ou das metas na origem. Resumo documentado, não exportação bruta."
+}

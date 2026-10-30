@@ -1,0 +1,4 @@
+{"execution_mode": "aws", "run_id": "20261029T231856Z_37704ef5", "metric": "glue_duration_seconds", "value": 227.87475, "unit": "s"}
+{"execution_mode": "aws", "run_id": "20261029T231856Z_37704ef5", "metric": "glue_workers_g1x", "value": 2, "unit": "workers"}
+{"execution_mode": "aws", "run_id": "20261029T231856Z_37704ef5", "metric": "fact_municipality_rows", "value": 23995, "unit": "rows"}
+{"execution_mode": "aws", "run_id": "20261029T231856Z_37704ef5", "metric": "valid_stream_event_latency", "value": 2.180166, "unit": "s"}

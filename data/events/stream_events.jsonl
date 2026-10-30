@@ -1,0 +1,4 @@
+{"event_id":"evt-001","event_timestamp":"2026-10-26T20:00:00Z","ano":2024,"id_municipio":"4300001","sigla_uf":"RS","serie":"2","rede":"publica","taxa_alfabetizacao":82.5,"origem_dado":"simulado","event_type":"indicator_update"}
+{"event_id":"evt-001","event_timestamp":"2026-10-26T20:00:00Z","ano":2024,"id_municipio":"4300001","sigla_uf":"RS","serie":"2","rede":"publica","taxa_alfabetizacao":82.5,"origem_dado":"simulado","event_type":"indicator_update"}
+{"event_id":"evt-002","event_timestamp":"2026-10-26T20:01:00Z","ano":2024,"id_municipio":"4200001","sigla_uf":"SC","serie":"2","rede":"publica","taxa_alfabetizacao":81.0,"origem_dado":"simulado","event_type":"indicator_update"}
+{"event_id":"evt-invalid","event_timestamp":"2026-10-26T20:02:00Z","ano":2024,"id_municipio":"4200001","sigla_uf":"SC","serie":"2","rede":"publica","taxa_alfabetizacao":140.0,"origem_dado":"simulado","event_type":"indicator_update"}

@@ -1,0 +1,6 @@
+aws_region = "sa-east-1"
+project_name = "tc-alfabetizacao"
+alert_email = ""
+enable_daily_schedule = false
+min_join_match_rate = 0.95
+max_invalid_weight_rate = 0.001

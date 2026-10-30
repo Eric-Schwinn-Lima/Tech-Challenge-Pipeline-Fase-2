@@ -1,0 +1,40 @@
+{
+  "evidence_type": "documented_execution_summary",
+  "execution_mode": "local",
+  "run_id": "20261029T003707Z_763b68ad",
+  "status": "SUCCESS",
+  "started_at_utc": "2026-10-29T00:37:07.441Z",
+  "ended_at_utc": "2026-10-29T00:37:38.252Z",
+  "duration_seconds": 30.811,
+  "input_rows": {
+    "uf": 145,
+    "municipio": 23995,
+    "meta_alfabetizacao_brasil": 7,
+    "meta_alfabetizacao_uf": 189,
+    "meta_alfabetizacao_municipio": 37464,
+    "alunos": 1048575,
+    "dicionario": 27,
+    "required_entities_subtotal": 1110375,
+    "total_including_dictionary": 1110402
+  },
+  "quality_checks": 61,
+  "blocking_failures": 0,
+  "gold_rows": {
+    "fato_alfabetizacao_municipio": 23995,
+    "mart_alfabetizacao_uf": 145,
+    "mart_evolucao_temporal": 7,
+    "reconciliacao_microdados": 12393,
+    "mart_streaming_eventos": 2,
+    "total": 36542
+  },
+  "streaming_simulated": {
+    "received": 4,
+    "valid_to_gold": 2,
+    "quarantined": 1,
+    "duplicates_removed": 1
+  },
+  "bronze_bytes_copied": 162132540,
+  "local_format_note": "Execução registrada sem PyArrow: fallback CSV comprimido .csv.gz; não classificar como Parquet.",
+  "limitation": "alunos.csv contém 1.048.575 linhas; a possível truncagem precisa ser confirmada na origem.",
+  "note": "Resumo estruturado dos valores documentados; não é exportação bruta do CloudWatch ou da API AWS."
+}

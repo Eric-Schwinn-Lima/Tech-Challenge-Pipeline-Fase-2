@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tech-challenge-alfabetizacao"
+version = "1.0.0"
+description = "Pipeline híbrido batch e streaming para análise do Indicador Criança Alfabetizada"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pandas==2.2.3",
+  "pyarrow==18.1.0",
+  "boto3==1.35.90",
+  "python-dotenv==1.0.1",
+]
+
+[project.optional-dependencies]
+test = ["pytest==8.3.4"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

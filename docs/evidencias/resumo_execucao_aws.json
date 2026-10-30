@@ -1,0 +1,68 @@
+{
+  "evidence_type": "documented_execution_summary",
+  "execution_mode": "aws",
+  "reference_date": "2026-10-29",
+  "region": "us-east-2",
+  "glue_job_run_id": "20261029T231856Z_37704ef5",
+  "glue_status": "SUCCESS",
+  "quality_status": "PASSED",
+  "duration_seconds": 227.87475,
+  "glue_version": "4.0",
+  "worker_type": "G.1X",
+  "number_of_workers": 2,
+  "source_rows": {
+    "uf": 145,
+    "municipio": 23995,
+    "meta_alfabetizacao_brasil": 7,
+    "meta_alfabetizacao_uf": 189,
+    "meta_alfabetizacao_municipio": 37464,
+    "alunos": 1048575,
+    "dicionario": 27
+  },
+  "join_rates": {
+    "alunos_to_municipio": 0.99822809,
+    "municipio_to_uf": 0.98639456
+  },
+  "gold_rows": {
+    "fato_alfabetizacao_municipio": 23995,
+    "mart_alfabetizacao_uf": 145,
+    "mart_evolucao_temporal": 7,
+    "reconciliacao_microdados": 12393
+  },
+  "gold_status_counts": {
+    "Atingida": 2788,
+    "ABAIXO": 2444,
+    "SEM_META": 5664,
+    "NAO_COMPARAVEL": 13099
+  },
+  "athena_quality_query": {
+    "run_id": "20261029T231856Z_37704ef5",
+    "fact_rows": 23995,
+    "distinct_municipalities": 5550,
+    "null_municipal_target_rows": 18763,
+    "null_literacy_rate_rows": 0
+  },
+  "catalog": {
+    "silver_tables": 8,
+    "gold_tables": 4,
+    "total_tables": 12,
+    "silver_crawler": "SUCCEEDED",
+    "gold_crawler": "SUCCEEDED"
+  },
+  "step_functions": {
+    "execution_name": "validacao-pipeline-20261029201808",
+    "status": "SUCCEEDED",
+    "note": "A máquina executa o Glue Job; os crawlers foram iniciados separadamente."
+  },
+  "streaming": {
+    "transport": "SQS Standard -> Lambda -> S3 Bronze",
+    "messages_tested": 2,
+    "one_malformed_message": true,
+    "one_valid_json_event": true,
+    "valid_event_latency_seconds": 2.180166,
+    "analytics_schema_present": false,
+    "mart_streaming_eventos_created": false,
+    "action": "events lacking the analytical schema were quarantined by Glue"
+  },
+  "note": "Resumo compilado dos registros de execução conhecidos; não é exportação bruta da API AWS."
+}

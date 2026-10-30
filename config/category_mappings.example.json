@@ -1,0 +1,18 @@
+{
+  "_note": "Exemplo documental somente. A pipeline real lê data/source/dicionario.csv e não carrega este JSON automaticamente.",
+  "rede": {
+    "3": "Municipal",
+    "5": "Pública (Estadual e Municipal)"
+  },
+  "serie": {
+    "2": "2° ano do Ensino Fundamental"
+  },
+  "presenca": {
+    "0": "Ausente",
+    "1": "Presente"
+  },
+  "alfabetizado": {
+    "0": "Não",
+    "1": "Sim"
+  }
+}
