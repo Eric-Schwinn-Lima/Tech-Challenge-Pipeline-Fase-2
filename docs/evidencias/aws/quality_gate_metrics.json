@@ -1,0 +1,20 @@
+{
+  "run_id": "20261030T032201Z_ed47f526",
+  "status": "FAILED",
+  "started_at": "2026-10-30T03:22:01.510336Z",
+  "finished_at": "2026-10-30T03:22:45.427612Z",
+  "duration_seconds": 43.917276,
+  "source_rows": {
+    "uf": 145,
+    "municipio": 23996,
+    "meta_alfabetizacao_brasil": 7,
+    "meta_alfabetizacao_uf": 189,
+    "meta_alfabetizacao_municipio": 37464,
+    "alunos": 1048575,
+    "dicionario": 27
+  },
+  "gold_rows": {},
+  "join_rate_students_municipio": null,
+  "join_rate_municipio_uf": null,
+  "error": "duplicate_natural_keys:municipio: measured=1; threshold=0; Chaves: ['ano', 'id_municipio', 'serie', 'rede']"
+}

@@ -1,0 +1,104 @@
+{
+  "run_id": "20261030T032201Z_ed47f526",
+  "checked_at": "2026-10-30T03:22:45.287319Z",
+  "status": "FAILED",
+  "error": "duplicate_natural_keys:municipio: measured=1; threshold=0; Chaves: ['ano', 'id_municipio', 'serie', 'rede']",
+  "checks": [
+    {
+      "check_name": "required_table_non_empty:uf",
+      "severity": "BLOCKING",
+      "status": "PASS",
+      "measured": 145,
+      "threshold": "> 0",
+      "detail": "Entidade obrigatória precisa ser usada na pipeline."
+    },
+    {
+      "check_name": "required_table_non_empty:municipio",
+      "severity": "BLOCKING",
+      "status": "PASS",
+      "measured": 23996,
+      "threshold": "> 0",
+      "detail": "Entidade obrigatória precisa ser usada na pipeline."
+    },
+    {
+      "check_name": "required_table_non_empty:meta_alfabetizacao_brasil",
+      "severity": "BLOCKING",
+      "status": "PASS",
+      "measured": 7,
+      "threshold": "> 0",
+      "detail": "Entidade obrigatória precisa ser usada na pipeline."
+    },
+    {
+      "check_name": "required_table_non_empty:meta_alfabetizacao_uf",
+      "severity": "BLOCKING",
+      "status": "PASS",
+      "measured": 189,
+      "threshold": "> 0",
+      "detail": "Entidade obrigatória precisa ser usada na pipeline."
+    },
+    {
+      "check_name": "required_table_non_empty:meta_alfabetizacao_municipio",
+      "severity": "BLOCKING",
+      "status": "PASS",
+      "measured": 37464,
+      "threshold": "> 0",
+      "detail": "Entidade obrigatória precisa ser usada na pipeline."
+    },
+    {
+      "check_name": "required_table_non_empty:alunos",
+      "severity": "BLOCKING",
+      "status": "PASS",
+      "measured": 1048575,
+      "threshold": "> 0",
+      "detail": "Entidade obrigatória precisa ser usada na pipeline."
+    },
+    {
+      "check_name": "required_reference_table_non_empty:dicionario",
+      "severity": "BLOCKING",
+      "status": "PASS",
+      "measured": 27,
+      "threshold": "> 0",
+      "detail": "O dicionário oficial precisa estar disponível para traduzir códigos de categoria."
+    },
+    {
+      "check_name": "missing_keys:uf",
+      "severity": "BLOCKING",
+      "status": "PASS",
+      "measured": 0,
+      "threshold": 0,
+      "detail": "Chaves avaliadas: ['ano', 'sigla_uf', 'serie', 'rede']"
+    },
+    {
+      "check_name": "duplicate_natural_keys:uf",
+      "severity": "BLOCKING",
+      "status": "PASS",
+      "measured": 0,
+      "threshold": 0,
+      "detail": "Chaves: ['ano', 'sigla_uf', 'serie', 'rede']"
+    },
+    {
+      "check_name": "missing_keys:municipio",
+      "severity": "BLOCKING",
+      "status": "PASS",
+      "measured": 0,
+      "threshold": 0,
+      "detail": "Chaves avaliadas: ['ano', 'id_municipio', 'serie', 'rede']"
+    },
+    {
+      "check_name": "duplicate_natural_keys:municipio",
+      "severity": "BLOCKING",
+      "status": "FAIL",
+      "measured": 1,
+      "threshold": 0,
+      "detail": "Chaves: ['ano', 'id_municipio', 'serie', 'rede']"
+    },
+    {
+      "check_name": "quality_gate_exception",
+      "severity": "BLOCKING",
+      "status": "FAIL",
+      "measured": "duplicate_natural_keys:municipio: measured=1; threshold=0; Chaves: ['ano', 'id_municipio', 'serie', 'rede']",
+      "threshold": "all blocking rules pass",
+      "detail": "A camada seguinte não deve ser publicada."
+    }
+  ]
+}
