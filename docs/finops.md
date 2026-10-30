@@ -1,142 +1,219 @@
-# FinOps — medição, controles e projeção de custos
+# FinOps — estimativa baseada em medições
 
-## 1. Objetivos e princípios
+**Projeto:** Pipeline híbrida de dados para análise da alfabetização
+**Região:** `us-east-2` (US East — Ohio)
+**Última execução Glue usada como referência:** `20261029T231856Z_37704ef5`
+**Data de referência dos registros:** outubro de 2026
 
-- Medir o consumo observado, separando resultados locais de custos AWS.
-- Evitar downloads e reprocessamentos desnecessários de arquivos oficiais.
-- Preservar Bronze com `run_id`, mas controlar retenção e versões não correntes.
-- Usar Parquet + Snappy em Silver/Gold na AWS para reduzir leitura e armazenamento em comparação com formatos textuais, sem assumir economia sem medir.
-- Usar SQS Standard + Lambda orientada a eventos, sem consumidor sempre ativo.
-- Manter Glue enxuto: Glue 4.0, dois workers G.1X, timeout de 30 minutos. Aumentar recursos somente com evidência de gargalo.
-- Desabilitar o agendamento diário por padrão (`enable_daily_schedule = false`).
-- Projetar consultas Athena com filtros de partição (`run_id`) e seleção apenas das colunas necessárias.
-- Desligar recursos de demonstração quando não forem mais necessários, depois de exportar evidências e avaliar a retenção.
+> Esta estimativa separa consumo observado, preço público de referência e projeção hipotética. Não representa uma fatura final nem um valor total garantido. Preços podem variar por região, modalidade, nível gratuito, impostos e condições da conta. Validar os valores finais na AWS Pricing Calculator e no Cost Explorer.
 
-## 2. Medições locais — não são custo AWS
+## 1. Perfil observado da execução AWS
 
-Execução local `20261029T003707Z_763b68ad`, registrada em `evidencias_execucao_local.md`:
-
-| Métrica | Valor |
+| Medição | Valor observado |
 |---|---:|
-| Registros nas seis entidades obrigatórias | 1.110.375 |
-| Linhas de alunos | 1.048.575 |
-| Dicionário auxiliar | 27 |
-| Bytes copiados para Bronze local | 162.132.540 |
-| Eventos simulados recebidos | 4 |
-| Eventos encaminhados à Gold local | 2 |
-| Eventos em quarentena | 1 |
-| Duplicados removidos | 1 |
-| Verificações de qualidade | 61 |
-| Falhas bloqueantes locais | 0 |
-| Linhas nas cinco saídas Gold locais | 36.542 |
+| Job Glue | `tc-alfabetizacao-a9455abd-medallion-pipeline` |
+| Versão do Glue | 4.0 |
+| Tipo de worker | G.1X |
+| Quantidade de workers | 2 |
+| Duração da execução | 227,87475 segundos |
+| Duração em horas | 0,06329854 h |
+| Registros de alunos lidos | 1.048.575 |
+| Linhas na fato municipal | 23.995 |
+| Linhas em `mart_alfabetizacao_uf` | 145 |
+| Linhas em `mart_evolucao_temporal` | 7 |
+| Linhas em `reconciliacao_microdados` | 12.393 |
+| Status do job | `SUCCESS` |
+| Status das verificações de qualidade | `PASSED` |
 
-Na execução local documentada, PyArrow não estava instalado e a saída usou fallback `.csv.gz`; portanto, não registre essa execução local como Parquet. O job AWS Glue produziu Parquet Snappy.
+A execução de referência foi manual. O agendamento diário está desabilitado (`enable_daily_schedule = false`). Portanto, o cenário mensal abaixo é uma projeção de capacidade, não o consumo operacional atual.
 
-## 3. Medição AWS observada
+## 2. Cálculo verificável do AWS Glue ETL
 
-Execução mais recente registrada em 29/10/2026:
+A página pública do AWS Glue apresenta US$ 0,44 por DPU-hora como preço de referência para ETL e informa que a cobrança é proporcional ao uso, por segundo, com duração mínima de um minuto. O preço efetivo deve ser confirmado para `us-east-2`.
 
-| Métrica | Valor observado |
-|---|---:|
-| Glue Run ID | `20261029T231856Z_37704ef5` |
-| Estado | `SUCCESS` |
-| Quality status | `PASSED` |
-| Duração do job | 227,87475 s (aprox. 3,80 min) |
-| Workers | 2 × G.1X |
-| Fato municipal | 23.995 linhas |
-| Mart por UF | 145 linhas |
-| Evolução temporal | 7 linhas |
-| Reconciliação de microdados | 12.393 linhas |
-| Tabelas no Data Catalog | 12 (8 Silver + 4 Gold) |
+Para workers G.1X, cada worker equivale a 1 DPU. Assim:
 
-Uma consulta Athena à visão por UF teve duração observada de aproximadamente 493 ms e 1.149 bytes escaneados. Esse dado descreve aquela consulta específica; não é o consumo de todas as consultas. Sempre capture `Data scanned` de cada consulta usada como evidência.
+```text
+DPUs utilizadas = 2 workers × 1 DPU = 2 DPUs
+Horas executadas = 227,87475 / 3.600
+                 = 0,06329854 h
 
-## 4. Controles implementados
+Custo estimado por execução =
+    2 DPUs × 0,06329854 h × US$ 0,44
+  = US$ 0,05570
+```
 
-### AWS Budget
+### Cenário hipotético de execução diária
 
-- Tipo: custo real (ACTUAL).
-- Periodicidade: diária.
-- Limite configurado: **US$ 10 por dia**.
-- Notificação: **85%**, equivalente a **US$ 8,50**, por e-mail.
+| Unidade | Quantidade | Preço de referência | Custo projetado |
+|---|---:|---:|---:|
+| Glue ETL, uma execução | 2 DPU × 0,06329854 h | US$ 0,44/DPU-h | US$ 0,05570 |
+| Glue ETL, 30 execuções/mês | 60 DPU × 0,06329854 h | US$ 0,44/DPU-h | **US$ 1,67108/mês** |
 
-O Budget é um mecanismo de alerta, **não um bloqueio automático de gastos** nem uma previsão de custo mensal. A projeção mensal deve usar o padrão real de execução e recursos persistentes.
+Este valor cobre somente o tempo do job ETL. Não inclui crawlers, tentativas adicionais, execução de outros jobs, armazenamento, requisições S3 ou outros serviços.
 
-### CloudWatch e SNS
+## 3. Athena — consulta observada e projeção ilustrativa
 
-- Alarme da Lambda: métrica `AWS/Lambda – Errors`, soma, período de 300 s, uma avaliação, limiar maior ou igual a 1.
-- Estado observado: `OK`; ações habilitadas e direcionadas ao tópico SNS.
-- Assinatura de e-mail SNS: confirmada.
-- Métricas customizadas no namespace `AlfabetizacaoPipeline`: `EventsIngested`, `InvalidEvents`, `EventLatencySeconds`.
+Uma consulta de validação executada no Athena registrou 1.149 bytes escaneados e aproximadamente 493 ms de execução. A página oficial informa cobrança por volume escaneado, arredondamento por MB e mínimo de 10 MB por consulta; o preço de referência divulgado é US$ 5 por TB escaneado.
 
-### S3
+Como o volume observado está abaixo do mínimo faturável, a estimativa ilustrativa por consulta é:
 
-- Bucket versionado, criptografado com SSE-S3 e bloqueio de acesso público.
-- Abort de multipart upload incompleto após sete dias.
-- Expiração de versões não correntes após 90 dias.
-- A listagem de objetos atuais com `aws s3 ls --recursive --summarize` não contabiliza todas as versões não correntes; a cobrança real deve ser conferida no Cost Explorer/S3 Storage Lens.
+```text
+Volume faturável mínimo = 10 MB
+Custo de referência = 10 MB / 1.000.000 MB × US$ 5/TB
+                    ≈ US$ 0,00005 por consulta
+```
 
-## 5. Cost Explorer — fotografia observada
+| Cenário | Quantidade | Custo ilustrativo |
+|---|---:|---:|
+| Consulta observada (mínimo faturável) | 1 | US$ 0,00005 |
+| 30 consultas semelhantes no mês | 30 | US$ 0,00150 |
+| 100 consultas semelhantes no mês | 100 | US$ 0,00500 |
 
-Consulta realizada em 29/10/2026 para o período de **01/10/2026 a 29/10/2026**. A consulta utilizou 30/10/2026 como data final exclusiva.
+A simulação pressupõe que cada consulta permaneça no mínimo de 10 MB faturáveis. Consultas futuras que leiam mais dados terão custo maior. DDL, consultas com falha e outros detalhes de faturamento devem ser avaliados conforme a regra oficial vigente.
 
-| Serviço/linha | Valor observado no relatório |
-|---|---:|
-| S3 | aproximadamente US$ 0,0000000007 |
-| Data Transfer | aproximadamente US$ -0,0000000015 |
-| Demais serviços consultados (Glue, Lambda, Athena, SQS, SNS, Step Functions, CloudWatch, KMS, Secrets Manager e CloudFormation) | US$ 0,00 no relatório consultado |
+## 4. Serviços implantados e dados ainda necessários
 
-Os valores de S3 e transferência são residuais e próximos de zero; a linha negativa de transferência pode refletir ajuste/crédito. **Não declarar custo final zero.** Cost Explorer e Billing podem apresentar atraso, ajustes posteriores e arredondamentos. Consulte novamente antes da entrega final e após a permanência de recursos na conta.
+Não se deve confundir número de mensagens, execuções ou objetos com unidades faturáveis. Para concluir uma projeção integral, precisamos extrair as unidades de consumo listadas abaixo.
 
-## 6. Projeção mensal — o que pode e o que não pode ser afirmado
+| Serviço | Unidade faturável relevante | Dado disponível | O que falta para fechar a projeção |
+|---|---|---|---|
+| S3 Standard | GB-mês, PUT/COPY/POST/LIST, GET e transferência | Fontes e saídas armazenadas no bucket; versionamento habilitado | Tamanho total atual, versões não atuais, quantidade de requisições e retenção |
+| Glue ETL | DPU-hora | 2 DPU por 227,87475 s na última execução | Frequência mensal efetiva e quantidade de novas tentativas |
+| Glue Crawlers | DPU-hora | Dois crawlers concluíram com sucesso | Duração e DPUs efetivamente consumidas por crawler |
+| Glue Data Catalog | Objetos de metadados e acessos faturáveis | 12 tabelas catalogadas | Volume de objetos/partições e eventual cobrança acima da franquia |
+| Athena | TB escaneados por consulta | Uma consulta observada com 1.149 bytes escaneados | Quantidade mensal de consultas e bytes escaneados de cada uma |
+| Lambda | Solicitações e GB-segundo | Dois eventos de teste: um válido e um inválido | Invocações totais, memória configurada e duração total faturável |
+| SQS Standard | Requisições, em blocos de até 64 KB | Dois eventos de teste enviados ao fluxo | Solicitações API totais (send, receive, delete, retries e polling) |
+| Step Functions Standard | Transições de estado | Uma execução `SUCCEEDED` | Número real de transições por execução, incluindo retries |
+| CloudWatch | Métricas customizadas, alarmes, logs ingeridos/armazenados | Três nomes de métricas customizadas e um alarme Lambda | Quantidade faturável de métricas, volume de logs e retenção |
+| SNS | Notificações/publicações e transferências aplicáveis | Tópico e assinatura de e-mail configurados | Quantidade mensal de publicações e notificações |
 
-Com os registros disponíveis, não há base suficiente para uma estimativa mensal confiável em dólares por serviço. O orçamento de US$ 10/dia é um limite de notificação e não pode ser apresentado como custo esperado.
+### Referências públicas de preço
 
-Para calcular projeção, registre por serviço:
+- **Glue:** US$ 0,44 por DPU-hora como referência publicada; crawlers também são cobrados conforme DPU-hora.
+- **Athena:** cobrança por dados escaneados; referência de US$ 5/TB e mínimo de 10 MB por consulta.
+- **Lambda:** nível gratuito publicado de 1 milhão de solicitações e 400.000 GB-segundo/mês; após franquias, preço depende de arquitetura, região e memória.
+- **SQS:** a página oficial informa 1 milhão de requisições gratuitas por mês; cada ação API conta como requisição e payloads maiores podem consumir múltiplos blocos.
+- **Step Functions Standard:** cobrança por transições de estado; o nível gratuito publicado inclui 4.000 transições/mês. A página consultada apresenta US$ 0,000025 por transição em sua tabela/exemplo para N. Virginia; confirmar o preço específico de Ohio na calculadora.
+- **S3:** armazenamento, solicitações e transferência são cobrados separadamente; o preço depende da classe, região, volume, tipo de requisição e retenção.
+- **CloudWatch:** verificar preços de métricas customizadas, alarmes, logs ingeridos e armazenamento conforme a região.
 
-| Serviço | Métrica necessária | Fonte de medição |
-|---|---|---|
-| S3 | GB-mês, número de objetos, versões, PUT/GET/LIST | S3 Storage Lens, métricas e Cost Explorer |
-| Glue | worker type, workers, duração faturável por execução | Glue Job Run e Cost Explorer |
-| SQS | requisições, tamanho médio de payload, mensagens | Métricas SQS/CloudWatch e Cost Explorer |
-| Lambda | invocações, duração e memória | CloudWatch `Invocations`/`Duration` |
-| Step Functions | execuções e transições | Histórico de execuções e tipo de workflow |
-| Athena | bytes escaneados por consulta | Detalhes da query e Cost Explorer |
-| CloudWatch | ingestão/armazenamento de logs, métricas e alarmes | CloudWatch/Cost Explorer |
-| SNS | notificações/publicações entregues | Métricas SNS/Cost Explorer |
+## 5. Resultado do Cost Explorer observado
 
-A projeção é: uso medido por execução × frequência mensal planejada, somado ao armazenamento que permanece entre execuções e aos serviços continuamente ativos. Consulte os preços oficiais na região `us-east-2` na data da estimativa. Não preencha preço unitário ou custo mensal por aproximação não verificada.
+Na consulta histórica realizada para outubro de 2026 (1º a 29 de outubro, com a data final exclusiva em 30 de outubro), os valores apresentados estavam próximos de zero. Foram observados valores residuais muito pequenos em S3 e transferência de dados, enquanto diversos outros serviços apareciam como US$ 0,00.
 
-## 7. Consultas Athena econômicas
+Essa leitura deve ser apresentada como **consumo de baixo volume no período de teste**, não como custo total definitivo nem como garantia de custo zero. O Cost Explorer pode ter atraso de atualização e valores arredondados na visualização. Reconciliar com a fatura após o fechamento do período.
 
-- Filtre sempre `run_id` nas tabelas Gold.
-- Filtre ano, UF ou município conforme a pergunta.
-- Selecione colunas necessárias, evite `SELECT *`.
-- Registre o volume escaneado.
-- Não trate várias execuções como uma única série sem escolher uma regra explícita.
+## 6. Controles FinOps implementados
 
-## 8. Retenção e desligamento
+| Controle | Configuração / evidência |
+|---|---|
+| AWS Budget | Orçamento diário de US$ 10 |
+| Alerta do orçamento | Custo real em 85% do orçamento (US$ 8,50/dia) |
+| CloudWatch Alarm | `tc-alfabetizacao-a9455abd-stream-lambda-errors` |
+| Métrica do alarme | `Errors` da Lambda |
+| Limite do alarme | 1 |
+| Estado observado | `OK` no momento da verificação |
+| Notificação | SNS com assinatura de e-mail confirmada |
+| Métricas customizadas | `EventsIngested`, `InvalidEvents`, `EventLatencySeconds` |
+| Agendamento diário | Desabilitado por padrão |
 
-Antes de destruir a infraestrutura:
+O orçamento de US$ 10/dia é um limite de alerta e governança, não uma previsão de gasto nem um custo fixo.
 
-1. Exporte resultados, logs, métricas, relatórios de qualidade e prints exigidos.
-2. Confirme que o bucket é exclusivamente do projeto.
-3. Remova versões S3 não correntes com o script de purge do projeto, após revisar o nome e a região.
-4. Execute `terraform destroy` somente depois de revisar o plano destrutivo.
-5. Confira Billing/Cost Explorer depois da remoção, lembrando do atraso de atualização.
+## 7. Cenário mensal de referência — não é a fatura total
 
-O script `scripts/purge_versioned_bucket.py` é destrutivo e não deve ser executado em bucket que contenha dados de outra finalidade.
+Com os dados atualmente comprovados, só é possível calcular com segurança o subconjunto Glue ETL e um cenário ilustrativo de Athena:
 
-## 9. Preços oficiais
+| Componente | Cenário | Custo mensal calculável |
+|---|---|---:|
+| Glue ETL | 30 execuções iguais à execução de referência | US$ 1,67108 |
+| Athena | 30 consultas semelhantes, mínimo 10 MB cada | US$ 0,00150 |
+| **Subtotal conhecido modelado** | **Somente estes dois componentes** | **US$ 1,67258** |
 
-- [AWS Pricing Calculator](https://calculator.aws/)
-- [Amazon S3](https://aws.amazon.com/s3/pricing/)
-- [AWS Glue](https://aws.amazon.com/glue/pricing/)
-- [Amazon Athena](https://aws.amazon.com/athena/pricing/)
-- [Amazon SQS](https://aws.amazon.com/sqs/pricing/)
-- [AWS Lambda](https://aws.amazon.com/lambda/pricing/)
-- [AWS Step Functions](https://aws.amazon.com/step-functions/pricing/)
-- [Amazon CloudWatch](https://aws.amazon.com/cloudwatch/pricing/)
-- [Amazon SNS](https://aws.amazon.com/sns/pricing/)
+**Não apresentar US$ 1,67258 como custo mensal total da arquitetura.** S3, crawlers, Lambda, SQS, Step Functions, CloudWatch e SNS ainda dependem da extração de quantidades adicionais. Também não se deve assumir que o nível gratuito se aplica integralmente: ele depende da elegibilidade e do consumo agregado da conta.
 
-Sempre registre a data de consulta, a região e as premissas da projeção.
+## 8. Comandos para coletar as métricas que faltam
+
+Executar no PowerShell com perfil `AWS-tech-challenge-terraform` e região `us-east-2`:
+
+### 8.1 Tamanho agregado do bucket
+
+```powershell
+aws s3 ls s3://tc-alfabetizacao-a9455abd-lake/ --recursive --summarize --profile AWS-tech-challenge-terraform --region us-east-2
+```
+
+Registre `Total Objects` e `Total Size`. Para bucket versionado, o tamanho de objetos atuais não inclui necessariamente todas as versões antigas.
+
+### 8.2 Configuração de versionamento e lifecycle
+
+```powershell
+aws s3api get-bucket-versioning --bucket tc-alfabetizacao-a9455abd-lake --profile AWS-tech-challenge-terraform --region us-east-2
+
+aws s3api get-bucket-lifecycle-configuration --bucket tc-alfabetizacao-a9455abd-lake --profile AWS-tech-challenge-terraform --region us-east-2
+```
+
+### 8.3 Configuração atual do Glue Job
+
+```powershell
+aws glue get-job --job-name tc-alfabetizacao-a9455abd-medallion-pipeline --profile AWS-tech-challenge-terraform --region us-east-2 --query "Job.{WorkerType:WorkerType,NumberOfWorkers:NumberOfWorkers,Timeout:Timeout,GlueVersion:GlueVersion}" --output table
+```
+
+### 8.4 Histórico e duração das execuções Glue
+
+```powershell
+aws glue get-job-runs --job-name tc-alfabetizacao-a9455abd-medallion-pipeline --max-results 20 --profile AWS-tech-challenge-terraform --region us-east-2 --query "JobRuns[].{RunId:Id,Started:StartedOn,Ended:CompletedOn,ExecutionTime:ExecutionTime,DPUSeconds:DPUSeconds,Status:JobRunState}" --output table
+```
+
+### 8.5 Contagem de execuções Step Functions
+
+Use o ARN da máquina de estados do projeto:
+
+```powershell
+aws stepfunctions list-executions --state-machine-arn arn:aws:states:us-east-2:262325794007:stateMachine:tc-alfabetizacao-a9455abd-pipeline-orchestrator --max-results 50 --profile AWS-tech-challenge-terraform --region us-east-2 --output table
+```
+
+Para calcular transições, consultar o histórico de cada execução com `get-execution-history`.
+
+### 8.6 Faturamento por serviço no Cost Explorer
+
+O Cost Explorer deve ser consultado com período fechado e intervalo de datas explícito. O parâmetro `End` é exclusivo:
+
+```powershell
+aws ce get-cost-and-usage `
+  --time-period Start=2026-10-01,End=2026-10-30 `
+  --granularity MONTHLY `
+  --metrics UnblendedCost UsageQuantity `
+  --group-by Type=DIMENSION,Key=SERVICE `
+  --profile AWS-tech-challenge `
+  --region us-east-1 `
+  --output json
+```
+
+Atualize as datas para o período efetivamente analisado quando repetir a medição. Cost Explorer é consultado em `us-east-1`, independentemente da região dos recursos.
+
+## 9. Decisões de otimização
+
+1. **Glue sob demanda:** o agendamento diário permanece desligado até que a frequência operacional seja justificada pelo negócio.
+2. **Workers limitados:** a execução de referência utilizou dois workers G.1X; aumentar capacidade só após medir duração, memória e gargalos.
+3. **Parquet/compaction:** manter formatos colunares e compressão quando efetivamente aplicados, para reduzir leitura e custo no Athena.
+4. **Athena:** selecionar colunas necessárias e filtrar por `run_id` para evitar misturar execuções e ler partições desnecessárias.
+5. **S3:** monitorar retenção, versionamento e tamanho de versões não atuais; lifecycle deve equilibrar custo e necessidade de histórico.
+6. **Streaming:** SQS Standard e Lambda permitem processamento desacoplado em baixo volume; acompanhar polling, retries, DLQ (se adotada) e duplicidade.
+7. **Alertas:** o orçamento diário e o CloudWatch Alarm devem ser revisados periodicamente para assegurar que notificações chegam aos responsáveis.
+
+## 10. Conclusão
+
+A arquitetura foi provisionada e executada em AWS, e existem controles operacionais de orçamento e alertas. O custo conhecido do Glue ETL pode ser estimado a partir da duração observada. O custo mensal total ainda deve ser fechado com métricas de armazenamento/versionamento S3, duração dos crawlers, volume de consultas Athena, uso Lambda/SQS, transições Step Functions e volume de logs/metricas CloudWatch.
+
+A apresentação do FinOps deve manter explícita essa distinção entre **medição observada**, **projeção hipotética** e **componente ainda não quantificado**.
+
+## Fontes oficiais de preço
+
+- AWS Glue: https://aws.amazon.com/glue/pricing/
+- Amazon Athena: https://aws.amazon.com/athena/pricing/
+- Amazon S3: https://aws.amazon.com/s3/pricing/
+- AWS Lambda: https://aws.amazon.com/lambda/pricing/
+- Amazon SQS: https://aws.amazon.com/sqs/pricing/
+- AWS Step Functions: https://aws.amazon.com/step-functions/pricing/
+- AWS Pricing Calculator: https://calculator.aws/
