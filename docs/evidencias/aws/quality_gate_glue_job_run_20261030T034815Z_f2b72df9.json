@@ -1,0 +1,32 @@
+﻿{
+    "JobRun": {
+        "Id": "jr_a6929c6ebebf3532ccde25591a7d7868b29798272182c52cb7f4a5437efadc99",
+        "Attempt": 0,
+        "JobName": "tc-alfabetizacao-a9455abd-medallion-pipeline",
+        "JobMode": "SCRIPT",
+        "JobRunQueuingEnabled": false,
+        "StartedOn": "2026-10-30T00:47:37.001000-03:00",
+        "LastModifiedOn": "2026-10-30T00:49:17.936000-03:00",
+        "CompletedOn": "2026-10-30T00:49:17.936000-03:00",
+        "JobRunState": "FAILED",
+        "Arguments": {
+            "--OUTPUT_PREFIX": "s3://tc-alfabetizacao-a9455abd-lake/silver/quality-gate-tests/20261030T034712Z-34e3229f",
+            "--STREAM_PREFIX": "s3://tc-alfabetizacao-a9455abd-lake/bronze/quality-gate-tests/20261030T034712Z-34e3229f/streaming",
+            "--GOLD_PREFIX": "s3://tc-alfabetizacao-a9455abd-lake/gold/quality-gate-tests/20261030T034712Z-34e3229f",
+            "--SOURCE_PREFIX": "s3://tc-alfabetizacao-a9455abd-lake/bronze/quality-gate-tests/20261030T034712Z-34e3229f/source",
+            "--MAX_INVALID_WEIGHT_RATE": "0.001",
+            "--MIN_JOIN_MATCH_RATE": "0.95"
+        },
+        "ErrorMessage": "RuntimeError: QUALITY_GATE_BLOCKED: duplicate_natural_keys:municipio: measured=1; threshold=0; Chaves: ['ano', 'id_municipio', 'serie', 'rede']",
+        "PredecessorRuns": [],
+        "AllocatedCapacity": 2,
+        "ExecutionTime": 89,
+        "Timeout": 30,
+        "MaxCapacity": 2.0,
+        "WorkerType": "G.1X",
+        "NumberOfWorkers": 2,
+        "LogGroupName": "/aws-glue/jobs",
+        "GlueVersion": "4.0",
+        "DPUSeconds": 179.0
+    }
+}
