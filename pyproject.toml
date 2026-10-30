@@ -7,7 +7,7 @@ name = "tech-challenge-alfabetizacao"
 version = "1.0.0"
 description = "Pipeline híbrido batch e streaming para análise do Indicador Criança Alfabetizada"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = [
   "pandas==2.2.3",
   "pyarrow==18.1.0",

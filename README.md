@@ -2,10 +2,10 @@
 
 **Projeto acadêmico de Engenharia de Dados | POSTECH / FIAP — AI Scientist**
 
-[![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.11--3.13-blue)](https://www.python.org/)
 [![AWS](https://img.shields.io/badge/AWS-S3%20%7C%20Glue%20%7C%20Athena-orange)](https://aws.amazon.com/)
 [![Terraform](https://img.shields.io/badge/IaC-Terraform-844FBA)](https://www.terraform.io/)
-[![Tests](https://img.shields.io/badge/tests-8%20passed-brightgreen)](#testes)
+[![Tests](https://img.shields.io/badge/tests-9%20passed-brightgreen)](#testes)
 
 > **Status da entrega:** pipeline executada localmente e implantada/validada na AWS. A execução AWS documentada processou as camadas Bronze, Silver e Gold, catalogou 12 tabelas e concluiu o job Glue com `SUCCESS` e o relatório de qualidade com `PASSED`. As limitações de cobertura das metas e de completude dos microdados permanecem explicitadas neste documento.
 
@@ -217,7 +217,7 @@ Para diagnóstico e recuperação, consulte [`docs/runbook.md`](docs/runbook.md)
 
 ### Pré-requisitos
 
-- Python 3.11 ou superior, preferencialmente Python 3.11 para maior compatibilidade com as versões fixadas.
+- Python 3.11 a 3.13. A versão validada em clone limpo foi Python 3.13.14. Python 3.14 não foi validado com as dependências fixadas.
 - Git.
 - Acesso aos arquivos exportados da Base dos Dados.
 - PowerShell no Windows ou terminal Bash no Linux/macOS.
@@ -236,7 +236,7 @@ cd Tech-Challenge-Pipeline-Fase-2
 Crie e ative o ambiente virtual:
 
 ```powershell
-py -3.11 -m venv .venv
+py -3.13 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e ".[test]"
@@ -263,7 +263,7 @@ python scripts/run_local.py
 ```bash
 git clone https://github.com/Eric-Schwinn-Lima/Tech-Challenge-Pipeline-Fase-2.git
 cd Tech-Challenge-Pipeline-Fase-2
-python3.11 -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e '.[test]'
@@ -301,7 +301,7 @@ Com o ambiente virtual ativado:
 python -m pytest -q
 ```
 
-**Resultado registrado no ambiente de desenvolvimento:** `8 passed`.
+**Resultado validado em clone limpo (Python 3.13.14):** `9 passed in 1.66s`. Os testes utilizam fixtures pequenas e não exigem os CSVs oficiais completos.
 
 Também foram executadas verificações de compilação Python e validação do Terraform:
 
