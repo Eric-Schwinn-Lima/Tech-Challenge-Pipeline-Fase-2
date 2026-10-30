@@ -137,7 +137,7 @@ resource "aws_lambda_event_source_mapping" "sqs" {
   event_source_arn                   = aws_sqs_queue.events.arn
   function_name                      = aws_lambda_function.stream_consumer.arn
   batch_size                         = 10
-  enabled                            = true
+  enabled                            = false
   maximum_batching_window_in_seconds = 0
 }
 
