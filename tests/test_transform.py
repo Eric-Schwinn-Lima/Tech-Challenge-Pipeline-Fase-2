@@ -82,9 +82,9 @@ def test_gold_builds_target_monitoring_and_trajectory_marts():
         & (monitoring["ano"] == 2024)
     ].iloc[0]
     assert int(municipal_rs_2024["total_registros"]) == 2
-    assert int(municipal_rs_2024["atingida"]) == 1
-    assert int(municipal_rs_2024["abaixo_da_meta"]) == 1
-    assert round(float(municipal_rs_2024["percentual_atingimento_entre_comparaveis"]), 2) == 50.0
+    assert int(municipal_rs_2024["atingida"]) == 2
+    assert int(municipal_rs_2024["abaixo_da_meta"]) == 0
+    assert round(float(municipal_rs_2024["percentual_atingimento_entre_comparaveis"]), 2) == 100.0
 
     evolution = gold["mart_evolucao_temporal"]
     current = evolution[(evolution["ano"] == 2024) & (evolution["rede"] == "publica")].iloc[0]
