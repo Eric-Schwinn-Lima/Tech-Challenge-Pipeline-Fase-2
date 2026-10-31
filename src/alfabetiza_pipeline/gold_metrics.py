@@ -24,7 +24,7 @@ def build_proficiency_profile(municipality: pd.DataFrame, uf: pd.DataFrame) -> p
             column for column in
             ["ano", "sigla_uf", "id_municipio", "serie", "rede", "media_portugues", "taxa_alfabetizacao"]
             if column in source.columns
-        ]
+        ] + level_columns
         base = source[base_columns].copy()
         if "id_municipio" not in base.columns:
             base["id_municipio"] = pd.NA
