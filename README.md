@@ -552,6 +552,21 @@ O caminho **SQS → Lambda → S3** foi validado com eventos simulados. Um event
 
 Os eventos utilizados no teste não continham todos os campos analíticos necessários para a tabela Gold de streaming. Por isso, os eventos incompatíveis foram enviados para quarentena, e a execução AWS documentada não produziu a tabela `mart_streaming_eventos`. Essa evidência demonstra a ingestão técnica até a Bronze, não a produção de indicadores oficiais por streaming.
 
+
+### 9.3. Modelos Gold acrescentados no código atual
+
+A branch de evolução da Gold acrescenta três marts analíticas e amplia a evolução temporal e a reconciliação:
+
+| Tabela | Conteúdo |
+|---|---|
+| \`mart_perfil_proficiencia\` | Distribuição longa dos percentuais dos níveis de desempenho 0–8, com média de Português e taxa publicada como contexto. |
+| \`mart_acompanhamento_metas\` | Contagens por status, cobertura de metas, percentual de atingimento entre registros que têm meta e resultado, mediana e pior gap. |
+| \`mart_trajetoria_metas\` | Metas de Brasil, UF e município de 2024 a 2030, com ano do snapshot e variação anual da meta. |
+
+A \`mart_evolucao_temporal\` mantém a média simples municipal não oficial e acrescenta a variação anual em municípios pareados (mesma série e rede, anos consecutivos), incluindo contagens de melhoria, piora e estabilidade. A reconciliação explicita se existe registro publicado e se há taxa publicada disponível. A fato municipal e a mart de UF também passam a expor gap e status frente à meta nacional, respeitando o código de rede coberto pela meta Brasil.
+
+**Importante:** os números de execução AWS acima continuam sendo evidência histórica da versão que publicou quatro tabelas Gold. As novas marts estão no código desta branch e ainda precisam de execução local, testes e uma nova execução Glue/crawlers antes de serem apresentadas como resultados materializados na AWS. A soma dos níveis de proficiência é apenas diagnóstica; a taxa oficial de alfabetização não é reconstruída por soma de níveis.
+
 ## 10. Limitações conhecidas e interpretação dos resultados
 
 ### Completude dos microdados

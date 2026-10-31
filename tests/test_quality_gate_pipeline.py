@@ -8,7 +8,8 @@ import pandas as pd
 import pytest
 
 from alfabetiza_pipeline import pipeline as pipeline_module
-from alfabetiza_pipeline.quality import QualityGateFailure
+from alfabetiza_pipeline.quality import QualityGateFailure, validate_data
+from alfabetiza_pipeline.transform import transform_to_silver
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_FIXTURES = ROOT / "tests" / "fixtures" / "source"
@@ -104,3 +105,24 @@ def test_pipeline_blocks_silver_and_gold_when_quality_gate_fails(
 
     # The defect is reported, but source fixtures remain untouched.
     assert (source_dir / "municipio.csv").exists()
+
+
+def test_quality_gate_rejects_non_binary_flags_and_invalid_proficiency_percentages(tmp_path: Path) -> None:
+    raw = {
+        name: pd.read_csv(SOURCE_FIXTURES / f"{name}.csv", dtype=str)
+        for name in [
+            "uf", "municipio", "meta_alfabetizacao_brasil", "meta_alfabetizacao_uf",
+            "meta_alfabetizacao_municipio", "alunos",
+        ]
+    }
+    raw["alunos"].loc[0, "presenca"] = "1.5"
+    raw["municipio"]["proporcao_aluno_nivel_0"] = 120.0
+    silver = transform_to_silver(raw, EVENTS_FIXTURE)
+
+    results = validate_data(silver, "test-domain-rules", tmp_path / "observability")
+    by_name = {item["check_name"]: item for item in results}
+
+    assert by_name["binary_domain:alunos.presenca"]["status"] == "FAIL"
+    assert by_name["binary_domain:alunos.presenca"]["severity"] == "BLOCKING"
+    assert by_name["proficiency_level_range:municipio"]["status"] == "FAIL"
+    assert by_name["proficiency_level_range:municipio"]["severity"] == "BLOCKING"
