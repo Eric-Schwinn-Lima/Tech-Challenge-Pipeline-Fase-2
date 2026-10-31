@@ -122,13 +122,48 @@ def build_goal_trajectory(silver: dict[str, pd.DataFrame]) -> pd.DataFrame:
         ("MUNICIPIO", "meta_alfabetizacao_municipio"),
     ]
     outputs = []
+    municipality = silver.get("municipio", pd.DataFrame())
+    municipality_uf_map = {}
+    if (
+        not municipality.empty
+        and {"id_municipio", "sigla_uf"}.issubset(municipality.columns)
+    ):
+        municipality_dimension = municipality[["id_municipio", "sigla_uf"]].dropna().copy()
+        municipality_dimension["id_municipio"] = (
+            municipality_dimension["id_municipio"].astype("string")
+            .str.replace(r"\\.0$", "", regex=True).str.strip().str.zfill(7)
+        )
+        municipality_dimension["sigla_uf"] = (
+            municipality_dimension["sigla_uf"].astype("string").str.strip().str.upper()
+        )
+        municipality_dimension = municipality_dimension.drop_duplicates(
+            subset=["id_municipio"], keep="first"
+        )
+        municipality_uf_map = dict(zip(
+            municipality_dimension["id_municipio"],
+            municipality_dimension["sigla_uf"],
+        ))
+
     for geography, table_name in definitions:
         source = silver[table_name]
         if source.empty:
             continue
+        municipality_ids = (
+            source["id_municipio"].astype("string")
+            .str.replace(r"\\.0$", "", regex=True).str.strip().str.zfill(7)
+            if "id_municipio" in source.columns
+            else pd.Series(pd.NA, index=source.index, dtype="string")
+        )
+        resolved_uf = municipality_ids.map(municipality_uf_map)
+        if "sigla_uf" in source.columns:
+            sigla_uf = source["sigla_uf"].astype("string").str.strip().str.upper().fillna(resolved_uf)
+        elif geography == "MUNICIPIO":
+            sigla_uf = resolved_uf
+        else:
+            sigla_uf = pd.Series(pd.NA, index=source.index, dtype="string")
         target = pd.DataFrame({
             "nivel_geografico": geography,
-            "sigla_uf": source["sigla_uf"] if "sigla_uf" in source.columns else pd.NA,
+            "sigla_uf": sigla_uf,
             "id_municipio": source["id_municipio"] if "id_municipio" in source.columns else pd.NA,
             "ano_meta": source["ano"],
             "serie": source["serie"],
