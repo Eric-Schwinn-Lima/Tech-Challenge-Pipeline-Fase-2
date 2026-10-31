@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import boto3
 from awsglue.utils import getResolvedOptions
-from pyspark.sql import SparkSession, functions as F
+from pyspark.sql import SparkSession, functions as F, Window
 from pyspark.sql.utils import AnalysisException
 
 args = getResolvedOptions(sys.argv, ["JOB_NAME", "SOURCE_PREFIX", "STREAM_PREFIX", "OUTPUT_PREFIX", "GOLD_PREFIX", "MIN_JOIN_MATCH_RATE", "MAX_INVALID_WEIGHT_RATE"])
@@ -93,7 +93,9 @@ def normalize(df):
     for col in ["ano"]:
         if col in df.columns:
             df = df.withColumn(col, F.col(col).cast("int"))
-    for col in ["taxa_alfabetizacao", "meta_alfabetizacao", "peso_amostral", "proficiencia"]:
+    numeric_columns = ["taxa_alfabetizacao", "meta_alfabetizacao", "peso_amostral", "proficiencia", "media_portugues"]
+    numeric_columns += [f"proporcao_aluno_nivel_{level}" for level in range(9)]
+    for col in numeric_columns:
         if col in df.columns:
             df = df.withColumn(col, F.regexp_replace(F.col(col).cast("string"), ",", ".").cast("double"))
     for col in ["serie", "rede"]:
@@ -184,6 +186,21 @@ for name, df in frames.items():
             missing_counts[column] = missing_count
     quality_checks.append({"check_name": f"missing_values:{name}", "severity": "INFO", "status": "INFO", "measured": missing_counts, "threshold": "registrar ausências", "detail": "As variáveis críticas têm verificações bloqueantes separadas."})
 
+# Proficiency distributions are present in the official aggregates. Validate every
+# provided level independently; row-sum deviations remain diagnostic until source
+# rounding and coverage tolerance are confirmed.
+for name in ["uf", "municipio"]:
+    level_columns = [f"proporcao_aluno_nivel_{level}" for level in range(9) if f"proporcao_aluno_nivel_{level}" in frames[name].columns]
+    if level_columns:
+        invalid_levels = frames[name].filter(
+            F.expr(" OR ".join([f"({col} IS NOT NULL AND NOT ({col} BETWEEN 0 AND 100))" for col in level_columns]))
+        ).count()
+        record_check(f"proficiency_level_range:{name}", invalid_levels == 0, invalid_levels, 0, "Cada proporção de nível deve estar entre 0 e 100.")
+        total_expr = sum([F.coalesce(F.col(col), F.lit(0.0)) for col in level_columns])
+        rows_with_levels = frames[name].filter(F.expr(" OR ".join([f"{col} IS NOT NULL" for col in level_columns])))
+        total_outside = rows_with_levels.filter(~total_expr.between(99.0, 101.0)).count()
+        quality_checks.append({"check_name": f"proficiency_levels_sum_diagnostic:{name}", "severity": "INFO", "status": "INFO", "measured": total_outside, "threshold": "diagnóstico; validar tolerância na fonte", "detail": "Soma das proporções não é bloqueante até confirmar arredondamento e cobertura na origem."})
+
 for name in ["uf", "municipio"]:
     bad = frames[name].filter(F.col("taxa_alfabetizacao").isNotNull() & ~F.col("taxa_alfabetizacao").between(0, 100)).count()
     record_check(f"percentage_range:{name}", bad == 0, bad, 0, "Percentuais entre 0 e 100.")
@@ -192,6 +209,9 @@ for name in ["meta_alfabetizacao_brasil", "meta_alfabetizacao_uf", "meta_alfabet
     record_check(f"target_range:{name}", bad == 0, bad, 0, "Metas entre 0 e 100.")
 
 student_rows = frames["alunos"]
+for column in ["presenca", "alfabetizado"]:
+    invalid_binary = student_rows.filter(F.col(column).isNotNull() & ~F.col(column).isin(0, 1)).count()
+    record_check(f"binary_domain:alunos.{column}", invalid_binary == 0, invalid_binary, 0, "Valores válidos são 0/1; nulos são avaliados por regras específicas.")
 missing_presence = student_rows.filter(F.col("presenca").isNull()).count()
 record_check("missing_presence:alunos", missing_presence == 0, missing_presence, 0, "Presença traduzida pelo dicionário oficial.")
 present_rows = student_rows.filter(F.col("presenca") == 1)
@@ -254,9 +274,11 @@ calculated = assessed.groupBy("ano", "id_municipio", "sigla_uf", "serie", "rede"
 )
 
 # Build Gold by joining all three target tables into the municipal fact.
-meta_mun = frames["meta_alfabetizacao_municipio"].select("ano", "id_municipio", "serie", "rede", F.col("meta_alfabetizacao").alias("meta_municipio"))
-meta_uf = frames["meta_alfabetizacao_uf"].select("ano", "sigla_uf", "serie", "rede", F.col("meta_alfabetizacao").alias("meta_uf"))
+meta_mun = frames["meta_alfabetizacao_municipio"].select("ano", "id_municipio", "serie", "rede", F.col("meta_alfabetizacao").alias("meta_municipio")).withColumn("__meta_linha_municipal", F.lit(True))
+meta_uf = frames["meta_alfabetizacao_uf"].select("ano", "sigla_uf", "serie", "rede", F.col("meta_alfabetizacao").alias("meta_uf")).withColumn("__meta_linha_uf", F.lit(True))
 meta_br = frames["meta_alfabetizacao_brasil"].select("ano", "serie", "rede", F.col("meta_alfabetizacao").alias("meta_brasil"))
+municipal_target_years = [r[0] for r in meta_mun.select("ano").distinct().collect()]
+uf_target_years = [r[0] for r in meta_uf.select("ano").distinct().collect()]
 fact = municipio.join(meta_mun, ["ano", "id_municipio", "serie", "rede"], "left").join(meta_uf, ["ano", "sigla_uf", "serie", "rede"], "left").join(meta_br, ["ano", "serie", "rede"], "left")
 fact = fact.withColumn("gap_meta_municipio_pp", F.col("taxa_alfabetizacao") - F.col("meta_municipio"))
 municipal_target_networks = [r[0] for r in meta_mun.select("rede").distinct().collect()]
@@ -268,6 +290,23 @@ fact = fact.withColumn(
      .when(F.col("taxa_alfabetizacao") >= F.col("meta_municipio"), "ATINGIDA")
      .otherwise("ABAIXO_DA_META"),
 )
+fact = fact.withColumn(
+    "motivo_sem_meta_municipio",
+    F.when(F.col("status_meta_municipio") != "SEM_META", F.lit(None).cast("string"))
+     .when(~F.col("ano").isin(municipal_target_years), F.lit("ANO_SEM_COBERTURA"))
+     .when(F.col("__meta_linha_municipal").isNull(), F.lit("LINHA_AUSENTE"))
+     .otherwise(F.lit("META_NULA_ORIGEM")),
+)
+fact = fact.withColumn("gap_meta_brasil_pp", F.col("taxa_alfabetizacao") - F.col("meta_brasil"))
+national_target_networks = [r[0] for r in meta_br.select("rede").distinct().collect()]
+fact = fact.withColumn(
+    "status_meta_brasil",
+    F.when(~F.col("rede").isin(national_target_networks), "NAO_COMPARAVEL")
+     .when(F.col("taxa_alfabetizacao").isNull(), "SEM_RESULTADO")
+     .when(F.col("meta_brasil").isNull(), "SEM_META")
+     .when(F.col("taxa_alfabetizacao") >= F.col("meta_brasil"), "ATINGIDA")
+     .otherwise("ABAIXO_DA_META"),
+).drop("__meta_linha_municipal")
 fact = fact.withColumn("origem_dado", F.lit("oficial_tabela_agregada"))
 
 uf_mart = uf.join(meta_uf, ["ano", "sigla_uf", "serie", "rede"], "left").join(meta_br, ["ano", "serie", "rede"], "left")
@@ -281,14 +320,154 @@ uf_mart = uf_mart.withColumn(
      .when(F.col("taxa_alfabetizacao") >= F.col("meta_uf"), "ATINGIDA")
      .otherwise("ABAIXO_DA_META"),
 )
+uf_mart = uf_mart.withColumn(
+    "motivo_sem_meta_uf",
+    F.when(F.col("status_meta_uf") != "SEM_META", F.lit(None).cast("string"))
+     .when(~F.col("ano").isin(uf_target_years), F.lit("ANO_SEM_COBERTURA"))
+     .when(F.col("__meta_linha_uf").isNull(), F.lit("LINHA_AUSENTE"))
+     .otherwise(F.lit("META_NULA_ORIGEM")),
+)
+uf_mart = uf_mart.withColumn("gap_meta_brasil_pp", F.col("taxa_alfabetizacao") - F.col("meta_brasil"))
+uf_mart = uf_mart.withColumn(
+    "status_meta_brasil",
+    F.when(~F.col("rede").isin(national_target_networks), "NAO_COMPARAVEL")
+     .when(F.col("taxa_alfabetizacao").isNull(), "SEM_RESULTADO")
+     .when(F.col("meta_brasil").isNull(), "SEM_META")
+     .when(F.col("taxa_alfabetizacao") >= F.col("meta_brasil"), "ATINGIDA")
+     .otherwise("ABAIXO_DA_META"),
+).drop("__meta_linha_uf")
 uf_mart = uf_mart.withColumn("origem_dado", F.lit("oficial_tabela_agregada"))
 
 comparable_rede_values = [r[0] for r in municipio.select("rede").distinct().collect()]
 calculated_comparable = calculated.filter(F.col("rede").isin(comparable_rede_values))
-reconciliation = calculated_comparable.join(municipio.select("ano", "id_municipio", "sigla_uf", "serie", "rede", F.col("taxa_alfabetizacao").alias("taxa_oficial_publicada")), ["ano", "id_municipio", "sigla_uf", "serie", "rede"], "left")
+published = municipio.select(
+    "ano", "id_municipio", "sigla_uf", "serie", "rede",
+    F.col("taxa_alfabetizacao").alias("taxa_oficial_publicada"),
+).withColumn("__registro_publicado_encontrado", F.lit(True))
+reconciliation = calculated_comparable.join(published, ["ano", "id_municipio", "sigla_uf", "serie", "rede"], "left")
+reconciliation = reconciliation.withColumn("tem_registro_publicado", F.coalesce(F.col("__registro_publicado_encontrado"), F.lit(False)))
+reconciliation = reconciliation.withColumn(
+    "status_correspondencia",
+    F.when(~F.col("tem_registro_publicado"), "SEM_REGISTRO_PUBLICADO")
+     .when(F.col("taxa_oficial_publicada").isNull(), "REGISTRO_SEM_TAXA_PUBLICADA")
+     .otherwise("COMPARAVEL"),
+).drop("__registro_publicado_encontrado")
 reconciliation = reconciliation.withColumn("diferenca_pontos_percentuais", F.col("taxa_calculada_microdados") - F.col("taxa_oficial_publicada"))
-evolution = municipio.groupBy("ano", "serie", "rede").agg(F.avg("taxa_alfabetizacao").alias("media_simples_municipal_percentual"), F.countDistinct("id_municipio").alias("municipios_com_resultado"))
-evolution = evolution.withColumn("indicador_agregado", F.lit("media_simples_municipal_nao_oficial"))
+evolution_base = municipio.groupBy("ano", "serie", "rede").agg(F.avg("taxa_alfabetizacao").alias("media_simples_municipal_percentual"), F.countDistinct("id_municipio").alias("municipios_com_resultado"))
+history_window = Window.partitionBy("id_municipio", "serie", "rede").orderBy("ano")
+history = municipio.select("ano", "id_municipio", "serie", "rede", "taxa_alfabetizacao") \
+    .withColumn("ano_anterior", F.lag("ano").over(history_window)) \
+    .withColumn("taxa_ano_anterior", F.lag("taxa_alfabetizacao").over(history_window)) \
+    .withColumn("variacao_municipal_pp", F.col("taxa_alfabetizacao") - F.col("taxa_ano_anterior")) \
+    .filter(
+        F.col("ano_anterior").isNotNull()
+        & ((F.col("ano") - F.col("ano_anterior")) == 1)
+        & F.col("taxa_alfabetizacao").isNotNull()
+        & F.col("taxa_ano_anterior").isNotNull()
+    )
+comparison = history.groupBy("ano", "serie", "rede").agg(
+    F.countDistinct("id_municipio").alias("municipios_comparaveis_ano_anterior"),
+    F.avg("variacao_municipal_pp").alias("media_variacao_municipal_pp"),
+    F.countDistinct(F.when(F.col("variacao_municipal_pp") > 0, F.col("id_municipio"))).alias("municipios_melhoraram"),
+    F.countDistinct(F.when(F.col("variacao_municipal_pp") < 0, F.col("id_municipio"))).alias("municipios_pioraram"),
+    F.countDistinct(F.when(F.col("variacao_municipal_pp") == 0, F.col("id_municipio"))).alias("municipios_estaveis"),
+)
+evolution = evolution_base.join(comparison, ["ano", "serie", "rede"], "left")
+for count_column in ["municipios_comparaveis_ano_anterior", "municipios_melhoraram", "municipios_pioraram", "municipios_estaveis"]:
+    evolution = evolution.withColumn(count_column, F.coalesce(F.col(count_column), F.lit(0)).cast("long"))
+evolution = evolution.withColumn("indicador_agregado", F.lit("media_simples_municipal_nao_oficial")).withColumn("indicador_variacao", F.lit("variacao_ano_a_ano_municipios_pareados_nao_oficial"))
+evolution = evolution.withColumn("origem_dado", F.lit("oficial_tabela_agregada_agregada_sem_ponderacao"))
+
+# Long proficiency profile from the source's nine performance-level shares.
+def build_profile(source, geography):
+    levels = [level for level in range(9) if f"proporcao_aluno_nivel_{level}" in source.columns]
+    if not levels:
+        return None
+    selected = []
+    for column, default in [
+        ("ano", None), ("sigla_uf", None), ("id_municipio", None),
+        ("serie", None), ("rede", None), ("media_portugues", None),
+        ("taxa_alfabetizacao", None),
+    ]:
+        if column in source.columns:
+            selected.append(F.col(column))
+        else:
+            selected.append(F.lit(default).cast("string").alias(column))
+    sum_expr = sum([F.coalesce(F.col(f"proporcao_aluno_nivel_{level}").cast("double"), F.lit(0.0)) for level in levels])
+    array_expr = F.array(*[
+        F.struct(
+            F.lit(level).alias("nivel_desempenho"),
+            F.col(f"proporcao_aluno_nivel_{level}").cast("double").alias("proporcao_alunos_pct"),
+        ) for level in levels
+    ])
+    prepared = source.select(
+        *selected,
+        sum_expr.alias("soma_niveis_pct"),
+        F.explode(array_expr).alias("nivel"),
+    )
+    return prepared.select(
+        F.lit(geography).alias("nivel_geografico"),
+        "ano", "sigla_uf", "id_municipio", "serie", "rede",
+        F.col("nivel.nivel_desempenho").alias("nivel_desempenho"),
+        F.col("nivel.proporcao_alunos_pct").alias("proporcao_alunos_pct"),
+        "soma_niveis_pct", "media_portugues", "taxa_alfabetizacao",
+        F.lit("oficial_tabela_agregada").alias("origem_dado"),
+    ).filter(F.col("proporcao_alunos_pct").isNotNull())
+
+profiles = [build_profile(municipio, "MUNICIPIO"), build_profile(uf, "UF")]
+profiles = [frame for frame in profiles if frame is not None]
+profile_mart = profiles[0] if len(profiles) == 1 else profiles[0].unionByName(profiles[1]) if len(profiles) == 2 else None
+
+# Aggregate explicit denominators for attainment and target coverage.
+def build_monitoring(source, geography, status_column, gap_column):
+    group_cols = ["sigla_uf", "ano", "serie", "rede"]
+    attained = F.sum(F.when(F.col(status_column) == "ATINGIDA", 1).otherwise(0))
+    below = F.sum(F.when(F.col(status_column) == "ABAIXO_DA_META", 1).otherwise(0))
+    no_target = F.sum(F.when(F.col(status_column) == "SEM_META", 1).otherwise(0))
+    no_result = F.sum(F.when(F.col(status_column) == "SEM_RESULTADO", 1).otherwise(0))
+    non_comparable = F.sum(F.when(F.col(status_column) == "NAO_COMPARAVEL", 1).otherwise(0))
+    comparable = attained + below + no_target + no_result
+    with_target = attained + below
+    aggregated = source.groupBy(*group_cols).agg(
+        F.count(F.lit(1)).alias("total_registros"),
+        F.sum(F.when(F.col("taxa_alfabetizacao").isNotNull(), 1).otherwise(0)).alias("registros_com_resultado"),
+        attained.alias("atingida"), below.alias("abaixo_da_meta"),
+        no_target.alias("sem_meta"), no_result.alias("sem_resultado"),
+        non_comparable.alias("nao_comparavel"),
+        with_target.alias("registros_com_meta_e_resultado"),
+        F.expr(f"percentile_approx({gap_column}, 0.5)").alias("mediana_gap_meta_pp"),
+        F.min(gap_column).alias("pior_gap_meta_pp"),
+    )
+    aggregated = aggregated.withColumn("universo_comparavel", comparable)
+    aggregated = aggregated.withColumn("percentual_cobertura_meta", F.when(comparable > 0, with_target / comparable * 100.0))
+    aggregated = aggregated.withColumn("percentual_atingimento_entre_comparaveis", F.when(with_target > 0, attained / with_target * 100.0))
+    return aggregated.withColumn("nivel_geografico", F.lit(geography)).withColumn("origem_dado", F.lit("derivado_status_meta_oficial"))
+
+monitoring_municipal = build_monitoring(fact, "MUNICIPIOS_POR_UF", "status_meta_municipio", "gap_meta_municipio_pp")
+monitoring_uf = build_monitoring(uf_mart, "UF_OFICIAL", "status_meta_uf", "gap_meta_uf_pp")
+monitoring_mart = monitoring_municipal.unionByName(monitoring_uf)
+
+# Curves are kept separate from observed outcomes; future target years are not mixed into fact.
+def target_curve(source, geography):
+    result = source.select(
+        F.lit(geography).alias("nivel_geografico"),
+        (F.col("sigla_uf") if "sigla_uf" in source.columns else F.lit(None).cast("string")).alias("sigla_uf"),
+        (F.col("id_municipio") if "id_municipio" in source.columns else F.lit(None).cast("string")).alias("id_municipio"),
+        F.col("ano").alias("ano_meta"), "serie", "rede",
+        "meta_alfabetizacao",
+        (F.col("meta_snapshot_ano") if "meta_snapshot_ano" in source.columns else F.lit(None).cast("int")).alias("meta_snapshot_ano"),
+    )
+    curve_window = Window.partitionBy("nivel_geografico", "sigla_uf", "id_municipio", "serie", "rede").orderBy("ano_meta")
+    return result.withColumn("meta_ano_anterior", F.lag("meta_alfabetizacao").over(curve_window)) \
+        .withColumn("ano_meta_anterior", F.lag("ano_meta").over(curve_window)) \
+        .withColumn(
+            "variacao_meta_pp_ano_anterior",
+            F.when(F.col("ano_meta") - F.col("ano_meta_anterior") == 1, F.col("meta_alfabetizacao") - F.col("meta_ano_anterior")),
+        ).drop("meta_ano_anterior", "ano_meta_anterior").withColumn("origem_dado", F.lit("meta_oficial_snapshot"))
+
+goal_trajectory = target_curve(frames["meta_alfabetizacao_brasil"], "BRASIL") \
+    .unionByName(target_curve(frames["meta_alfabetizacao_uf"], "UF")) \
+    .unionByName(target_curve(frames["meta_alfabetizacao_municipio"], "MUNICIPIO"))
 
 # The stream path can be empty on the first deployment.
 # Invalid or incompatible events are quarantined, without blocking Batch.
@@ -421,6 +600,9 @@ gold_outputs = {
     "mart_alfabetizacao_uf": uf_mart,
     "mart_evolucao_temporal": evolution,
     "reconciliacao_microdados": reconciliation,
+    "mart_perfil_proficiencia": profile_mart if profile_mart is not None else municipio.limit(0),
+    "mart_acompanhamento_metas": monitoring_mart,
+    "mart_trajetoria_metas": goal_trajectory,
 }
 if stream is not None:
     gold_outputs["mart_streaming_eventos"] = stream
