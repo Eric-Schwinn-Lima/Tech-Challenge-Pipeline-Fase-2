@@ -62,7 +62,7 @@ def _monitoring_rows(frame: pd.DataFrame, geography: str) -> pd.DataFrame:
         "total_registros", "registros_com_resultado", "universo_comparavel",
         "atingida", "abaixo_da_meta", "sem_meta", "sem_resultado", "nao_comparavel",
         "registros_com_meta_e_resultado", "percentual_cobertura_meta",
-        "percentual_atingimento_entre_comparaveis", "mediana_gap_meta_pp",
+        "percentual_atingimento_entre_registros_com_meta_e_resultado", "mediana_gap_meta_pp",
         "pior_gap_meta_pp", "origem_dado",
     ]
     if frame.empty:
@@ -97,7 +97,7 @@ def _monitoring_rows(frame: pd.DataFrame, geography: str) -> pd.DataFrame:
             "nao_comparavel": not_comparable,
             "registros_com_meta_e_resultado": with_result_and_target,
             "percentual_cobertura_meta": (with_result_and_target / comparable * 100) if comparable else pd.NA,
-            "percentual_atingimento_entre_comparaveis": (attained / with_result_and_target * 100) if with_result_and_target else pd.NA,
+            "percentual_atingimento_entre_registros_com_meta_e_resultado": (attained / with_result_and_target * 100) if with_result_and_target else pd.NA,
             "mediana_gap_meta_pp": float(gaps.median()) if not gaps.empty else pd.NA,
             "pior_gap_meta_pp": float(gaps.min()) if not gaps.empty else pd.NA,
             "origem_dado": "derivado_status_meta_oficial",
