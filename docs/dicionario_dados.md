@@ -138,6 +138,59 @@ Ausência de meta não equivale a meta zero. `SEM_META` não deve ser interpreta
 - A fonte `alunos.csv` contém 1.048.575 registros, padrão compatível com possível limite de exportação de planilha. É alerta, não prova de truncamento.
 - O pipeline não deve preencher metas ou taxas ausentes com zero.
 
-## 8. Linhagem
+
+## 9. Produtos analíticos Gold adicionais
+
+A implementação mais recente do código acrescenta os seguintes produtos. As quantidades publicadas na seção de evidências AWS continuam descrevendo uma execução anterior, que materializou quatro tabelas Gold; as novas tabelas só devem ser contabilizadas como produtos executados após uma nova execução do Glue e atualização do Data Catalog.
+
+| Tabela | Grão | Objetivo |
+|---|---|---|
+| \`mart_perfil_proficiencia\` | geografia + ano + UF/município + série + rede + nível 0–8 | Distribuição percentual dos alunos pelos nove níveis, preservando \`media_portugues\` e \`taxa_alfabetizacao\` como medidas de contexto. |
+| \`mart_acompanhamento_metas\` | geografia + UF + ano + série + rede | Contagens por status, cobertura de meta, atingimento entre registros com meta e resultado, mediana e pior gap em pontos percentuais. |
+| \`mart_trajetoria_metas\` | geografia + entidade + ano-alvo + série + rede | Curva de metas de Brasil, UF e município de 2024 a 2030, preservando o ano do snapshot e a variação anual da meta. |
+
+### 9.1. Perfil de proficiência
+
+\`mart_perfil_proficiencia\` transforma as colunas \`proporcao_aluno_nivel_0\` a \`proporcao_aluno_nivel_8\` para o formato longo:
+
+- \`nivel_geografico\`: \`MUNICIPIO\` ou \`UF\`;
+- \`nivel_desempenho\`: inteiro de 0 a 8;
+- \`proporcao_alunos_pct\`: percentual da fonte para o nível;
+- \`soma_niveis_pct\`: soma das proporções disponíveis na linha;
+- \`media_portugues\`: média de proficiência em Língua Portuguesa da fonte;
+- \`taxa_alfabetizacao\`: indicador publicado que permanece independente.
+
+A mart não recalcula nem substitui a taxa oficial de alfabetização a partir dos níveis. Não se deve somar níveis inteiros para inferir o corte individual de alfabetização: o limite pode atravessar uma faixa de proficiência. As proporções são preservadas por nível para permitir análises e validações sem atribuir significado não documentado a agrupamentos de níveis.
+
+### 9.2. Acompanhamento de metas
+
+A tabela agrega os estados \`ATINGIDA\`, \`ABAIXO_DA_META\`, \`SEM_META\`, \`SEM_RESULTADO\` e \`NAO_COMPARAVEL\`.
+
+Definições dos denominadores:
+
+- \`universo_comparavel\`: registros cujo código de rede pertence ao universo coberto pela tabela de metas; inclui registros sem meta ou sem resultado.
+- \`registros_com_meta_e_resultado\`: soma de \`ATINGIDA\` e \`ABAIXO_DA_META\`.
+- \`percentual_cobertura_meta\`: \`registros_com_meta_e_resultado / universo_comparavel × 100\`.
+- \`percentual_atingimento_entre_registros_com_meta_e_resultado\`: \`ATINGIDA / registros_com_meta_e_resultado × 100\`.
+
+A \`mediana_gap_meta_pp\` e o \`pior_gap_meta_pp\` consideram somente gaps calculáveis, isto é, registros com resultado e meta. O pior gap é o menor valor (mais negativo). Os níveis geográficos são \`MUNICIPIOS_POR_UF\` e \`UF_OFICIAL\`; não se deve somar esses grupos entre si, pois representam universos diferentes.
+
+### 9.3. Trajetória de metas
+
+\`mart_trajetoria_metas\` consolida os três níveis de meta sem misturar projeções/anos-alvo futuros com resultados observados. \`ano_meta\` é o ano ao qual a meta se aplica; \`meta_snapshot_ano\` identifica o snapshot de origem quando fornecido pela preparação. \`variacao_meta_pp_ano_anterior\` só é preenchida quando há um ano-alvo imediatamente anterior para a mesma entidade, série e rede.
+
+### 9.4. Evolução temporal e reconciliação
+
+\`mart_evolucao_temporal\` mantém \`media_simples_municipal_percentual\` como média simples descritiva, não oficial e não ponderada. A nova comparação ano a ano usa apenas municípios com taxa publicada em dois anos consecutivos, na mesma série e rede, e registra a variação média em pontos percentuais e as contagens de municípios que melhoraram, pioraram ou permaneceram estáveis. Uma lacuna de ano não é tratada como comparação consecutiva.
+
+\`reconciliacao_microdados\` passa a registrar \`tem_registro_publicado\` e \`status_correspondencia\` (\`COMPARAVEL\`, \`SEM_REGISTRO_PUBLICADO\` ou \`REGISTRO_SEM_TAXA_PUBLICADA\`). A diferença entre o indicador calculado com pesos amostrais e a taxa publicada só é interpretável quando há taxa oficial publicada. A possível incompletude do arquivo de microdados permanece uma limitação conhecida.
+
+A fato municipal e a mart de UF também passam a expor \`gap_meta_brasil_pp\` e \`status_meta_brasil\`, para recortes de rede compatíveis com a tabela de meta nacional. Esses campos não substituem os gaps municipais e estaduais.
+
+### 9.5. Qualidade adicional
+
+O Quality Gate verifica os domínios binários de \`presenca\` e \`alfabetizado\` (0 ou 1) e o intervalo de 0 a 100 para cada proporção de nível disponibilizada. A soma das proporções dos níveis é registrada como diagnóstico informativo, não como bloqueio, até que arredondamento e cobertura da fonte sejam confirmados. Ausências continuam tratadas pelas regras específicas de cada variável.
+
+## 10. Linhagem
 
 A fonte original fica em `data/exports_raw/` (local, não versionada integralmente). A versão canônica fica em `data/source/`. No S3, o prefixo `bronze/raw_exports/` preserva cópias brutas e `bronze/source/` contém os CSVs canônicos esperados pelo Glue. Silver/Gold são produzidas por `run_id`.
