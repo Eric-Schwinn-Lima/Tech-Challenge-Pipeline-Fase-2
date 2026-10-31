@@ -111,6 +111,31 @@ def validate_data(silver: dict[str, pd.DataFrame], run_id: str, observability_di
         missing_counts = {col: int(df[col].isna().sum()) for col in df.columns if col not in keys and int(df[col].isna().sum()) > 0}
         results.append(_check(f"missing_values:{table}", True, "INFO", missing_counts, "registrar ausências", "Ausências são reportadas; as variáveis críticas têm regras bloqueantes específicas."))
 
+    # Optional proficiency distribution supplied by the aggregate source.
+    # Individual shares are blocking percentages; row totals are diagnostic only because
+    # source rounding/coverage can produce small deviations that need source-level review.
+    level_columns = [f"proporcao_aluno_nivel_{level}" for level in range(9)]
+    for table in ["uf", "municipio"]:
+        df = silver.get(table, pd.DataFrame())
+        present_levels = [column for column in level_columns if column in df.columns]
+        if not df.empty and present_levels:
+            invalid_level_values = 0
+            numeric_levels = df[present_levels].apply(pd.to_numeric, errors="coerce")
+            for column in present_levels:
+                values = numeric_levels[column]
+                invalid_level_values += int((values.notna() & ~values.between(0, 100)).sum())
+            results.append(_check(
+                f"proficiency_level_range:{table}", invalid_level_values == 0, "BLOCKING",
+                invalid_level_values, 0, "Cada proporção de nível deve estar entre 0 e 100."
+            ))
+            totals = numeric_levels.sum(axis=1, min_count=1)
+            outside_tolerance = int((totals.notna() & ~totals.between(99.0, 101.0)).sum())
+            results.append(_check(
+                f"proficiency_levels_sum_diagnostic:{table}", True, "INFO",
+                {"rows_outside_99_101_pct": outside_tolerance, "rows_with_level_data": int(totals.notna().sum())},
+                "diagnóstico; validar tolerância na fonte", "Soma das proporções de nível não é Quality Gate bloqueante até confirmar arredondamento e cobertura originais."
+            ))
+
     for table in ["uf", "municipio"]:
         df = silver.get(table, pd.DataFrame())
         if not df.empty and "taxa_alfabetizacao" in df.columns:
@@ -118,8 +143,19 @@ def validate_data(silver: dict[str, pd.DataFrame], run_id: str, observability_di
             out_of_range = int((~df["taxa_alfabetizacao"].dropna().between(0, 100)).sum())
             results.append(_check(f"percentage_range:{table}", bool(valid), "BLOCKING", out_of_range, 0, "Percentuais devem estar entre 0 e 100."))
 
+    # Binary fields must remain in the original 0/1 domain; null literacy values
+    # are still allowed for absent students and are handled by the presence rule below.
     students = silver.get("alunos", pd.DataFrame())
     if not students.empty:
+        for column in ["presenca", "alfabetizado"]:
+            if column not in students.columns:
+                continue
+            values = pd.to_numeric(students[column], errors="coerce")
+            invalid_binary = int((values.notna() & ~values.isin([0, 1])).sum())
+            results.append(_check(
+                f"binary_domain:alunos.{column}", invalid_binary == 0, "BLOCKING",
+                invalid_binary, 0, "Valores válidos são 0/1; nulos são avaliados por regras específicas."
+            ))
         missing_presence = int(students["presenca"].isna().sum())
         results.append(_check("missing_presence:alunos", missing_presence == 0, "BLOCKING", missing_presence, 0, "Presença deve estar traduzida pelo dicionário oficial; não inferir código desconhecido."))
         present = students[students["presenca"] == 1]
