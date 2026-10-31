@@ -472,9 +472,23 @@ def target_curve(source, geography):
             F.when(F.col("ano_meta") - F.col("ano_meta_anterior") == 1, F.col("meta_alfabetizacao") - F.col("meta_ano_anterior")),
         ).drop("meta_ano_anterior", "ano_meta_anterior").withColumn("origem_dado", F.lit("meta_oficial_snapshot"))
 
+# The municipal target source may not carry sigla_uf. Enrich it from the
+# municipality dimension so the Glue mart has the same geographic key as local Gold.
+municipal_targets = frames["meta_alfabetizacao_municipio"]
+municipality_uf_dimension = municipio.select("id_municipio", "sigla_uf") \
+    .dropna(subset=["id_municipio", "sigla_uf"]) \
+    .dropDuplicates(["id_municipio"])
+if "sigla_uf" in municipal_targets.columns:
+    municipality_uf_dimension = municipality_uf_dimension.withColumnRenamed("sigla_uf", "__sigla_uf_dimension")
+    municipal_targets = municipal_targets.join(municipality_uf_dimension, "id_municipio", "left") \
+        .withColumn("sigla_uf", F.coalesce(F.col("sigla_uf"), F.col("__sigla_uf_dimension"))) \
+        .drop("__sigla_uf_dimension")
+else:
+    municipal_targets = municipal_targets.join(municipality_uf_dimension, "id_municipio", "left")
+
 goal_trajectory = target_curve(frames["meta_alfabetizacao_brasil"], "BRASIL") \
     .unionByName(target_curve(frames["meta_alfabetizacao_uf"], "UF")) \
-    .unionByName(target_curve(frames["meta_alfabetizacao_municipio"], "MUNICIPIO"))
+    .unionByName(target_curve(municipal_targets, "MUNICIPIO"))
 
 # The stream path can be empty on the first deployment.
 # Invalid or incompatible events are quarantined, without blocking Batch.
