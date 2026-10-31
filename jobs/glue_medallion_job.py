@@ -447,7 +447,7 @@ def build_monitoring(source, geography, status_column, gap_column):
     target_count = F.col("registros_com_meta_e_resultado")
     aggregated = aggregated.withColumn("universo_comparavel", comparable_count)
     aggregated = aggregated.withColumn("percentual_cobertura_meta", F.when(comparable_count > 0, target_count / comparable_count * 100.0))
-    aggregated = aggregated.withColumn("percentual_atingimento_entre_comparaveis", F.when(target_count > 0, F.col("atingida") / target_count * 100.0))
+    aggregated = aggregated.withColumn("percentual_atingimento_entre_registros_com_meta_e_resultado", F.when(target_count > 0, F.col("atingida") / target_count * 100.0))
     return aggregated.withColumn("nivel_geografico", F.lit(geography)).withColumn("origem_dado", F.lit("derivado_status_meta_oficial"))
 
 monitoring_municipal = build_monitoring(fact, "MUNICIPIOS_POR_UF", "status_meta_municipio", "gap_meta_municipio_pp")
