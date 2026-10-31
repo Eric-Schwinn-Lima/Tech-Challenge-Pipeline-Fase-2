@@ -298,6 +298,7 @@ def build_gold(silver: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     have_br_target = comparable_br & fact["meta_brasil"].notna() & fact["taxa_alfabetizacao"].notna()
     fact.loc[have_br_target & (fact["taxa_alfabetizacao"] >= fact["meta_brasil"]), "status_meta_brasil"] = "ATINGIDA"
     fact.loc[have_br_target & (fact["taxa_alfabetizacao"] < fact["meta_brasil"]), "status_meta_brasil"] = "ABAIXO_DA_META"
+    fact = fact.drop(columns=["_meta_linha_encontrada_uf"])
     fact["motivo_sem_meta_municipio"] = pd.Series(pd.NA, index=fact.index, dtype="string")
     missing_muni = fact["status_meta_municipio"].eq("SEM_META")
     covered_muni_years = set(target_muni["ano"].dropna().astype(int))
