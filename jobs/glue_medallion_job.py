@@ -306,7 +306,7 @@ fact = fact.withColumn(
      .when(F.col("meta_brasil").isNull(), "SEM_META")
      .when(F.col("taxa_alfabetizacao") >= F.col("meta_brasil"), "ATINGIDA")
      .otherwise("ABAIXO_DA_META"),
-).drop("__meta_linha_municipal")
+).drop("__meta_linha_municipal", "__meta_linha_uf")
 fact = fact.withColumn("origem_dado", F.lit("oficial_tabela_agregada"))
 
 uf_mart = uf.join(meta_uf, ["ano", "sigla_uf", "serie", "rede"], "left").join(meta_br, ["ano", "serie", "rede"], "left")
@@ -394,6 +394,11 @@ def build_profile(source, geography):
         else:
             selected.append(F.lit(default).cast("string").alias(column))
     sum_expr = sum([F.coalesce(F.col(f"proporcao_aluno_nivel_{level}").cast("double"), F.lit(0.0)) for level in levels])
+    has_any_level = None
+    for level in levels:
+        present = F.col(f"proporcao_aluno_nivel_{level}").isNotNull()
+        has_any_level = present if has_any_level is None else (has_any_level | present)
+    sum_expr = F.when(has_any_level, sum_expr).otherwise(F.lit(None).cast("double"))
     array_expr = F.array(*[
         F.struct(
             F.lit(level).alias("nivel_desempenho"),
@@ -438,9 +443,11 @@ def build_monitoring(source, geography, status_column, gap_column):
         F.expr(f"percentile_approx({gap_column}, 0.5)").alias("mediana_gap_meta_pp"),
         F.min(gap_column).alias("pior_gap_meta_pp"),
     )
-    aggregated = aggregated.withColumn("universo_comparavel", comparable)
-    aggregated = aggregated.withColumn("percentual_cobertura_meta", F.when(comparable > 0, with_target / comparable * 100.0))
-    aggregated = aggregated.withColumn("percentual_atingimento_entre_comparaveis", F.when(with_target > 0, attained / with_target * 100.0))
+    comparable_count = F.col("atingida") + F.col("abaixo_da_meta") + F.col("sem_meta") + F.col("sem_resultado")
+    target_count = F.col("registros_com_meta_e_resultado")
+    aggregated = aggregated.withColumn("universo_comparavel", comparable_count)
+    aggregated = aggregated.withColumn("percentual_cobertura_meta", F.when(comparable_count > 0, target_count / comparable_count * 100.0))
+    aggregated = aggregated.withColumn("percentual_atingimento_entre_comparaveis", F.when(target_count > 0, F.col("atingida") / target_count * 100.0))
     return aggregated.withColumn("nivel_geografico", F.lit(geography)).withColumn("origem_dado", F.lit("derivado_status_meta_oficial"))
 
 monitoring_municipal = build_monitoring(fact, "MUNICIPIOS_POR_UF", "status_meta_municipio", "gap_meta_municipio_pp")
