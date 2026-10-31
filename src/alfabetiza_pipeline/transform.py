@@ -289,6 +289,15 @@ def build_gold(silver: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     have_target = comparable_muni & fact["meta_municipio"].notna() & fact["taxa_alfabetizacao"].notna()
     fact.loc[have_target & (fact["taxa_alfabetizacao"] >= fact["meta_municipio"]), "status_meta_municipio"] = "ATINGIDA"
     fact.loc[have_target & (fact["taxa_alfabetizacao"] < fact["meta_municipio"]), "status_meta_municipio"] = "ABAIXO_DA_META"
+    fact["gap_meta_brasil_pp"] = fact["taxa_alfabetizacao"] - fact["meta_brasil"]
+    comparable_br_networks = set(target_br["rede"].dropna().astype(str))
+    comparable_br = fact["rede"].astype(str).isin(comparable_br_networks)
+    fact["status_meta_brasil"] = "NAO_COMPARAVEL"
+    fact.loc[comparable_br, "status_meta_brasil"] = "SEM_META"
+    fact.loc[comparable_br & fact["taxa_alfabetizacao"].isna(), "status_meta_brasil"] = "SEM_RESULTADO"
+    have_br_target = comparable_br & fact["meta_brasil"].notna() & fact["taxa_alfabetizacao"].notna()
+    fact.loc[have_br_target & (fact["taxa_alfabetizacao"] >= fact["meta_brasil"]), "status_meta_brasil"] = "ATINGIDA"
+    fact.loc[have_br_target & (fact["taxa_alfabetizacao"] < fact["meta_brasil"]), "status_meta_brasil"] = "ABAIXO_DA_META"
     fact["motivo_sem_meta_municipio"] = pd.Series(pd.NA, index=fact.index, dtype="string")
     missing_muni = fact["status_meta_municipio"].eq("SEM_META")
     covered_muni_years = set(target_muni["ano"].dropna().astype(int))
@@ -311,6 +320,14 @@ def build_gold(silver: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     have_uf_target = comparable_uf & uf_mart["meta_uf"].notna() & uf_mart["taxa_alfabetizacao"].notna()
     uf_mart.loc[have_uf_target & (uf_mart["taxa_alfabetizacao"] >= uf_mart["meta_uf"]), "status_meta_uf"] = "ATINGIDA"
     uf_mart.loc[have_uf_target & (uf_mart["taxa_alfabetizacao"] < uf_mart["meta_uf"]), "status_meta_uf"] = "ABAIXO_DA_META"
+    uf_mart["gap_meta_brasil_pp"] = uf_mart["taxa_alfabetizacao"] - uf_mart["meta_brasil"]
+    comparable_br_uf = uf_mart["rede"].astype(str).isin(comparable_br_networks)
+    uf_mart["status_meta_brasil"] = "NAO_COMPARAVEL"
+    uf_mart.loc[comparable_br_uf, "status_meta_brasil"] = "SEM_META"
+    uf_mart.loc[comparable_br_uf & uf_mart["taxa_alfabetizacao"].isna(), "status_meta_brasil"] = "SEM_RESULTADO"
+    have_br_uf = comparable_br_uf & uf_mart["meta_brasil"].notna() & uf_mart["taxa_alfabetizacao"].notna()
+    uf_mart.loc[have_br_uf & (uf_mart["taxa_alfabetizacao"] >= uf_mart["meta_brasil"]), "status_meta_brasil"] = "ATINGIDA"
+    uf_mart.loc[have_br_uf & (uf_mart["taxa_alfabetizacao"] < uf_mart["meta_brasil"]), "status_meta_brasil"] = "ABAIXO_DA_META"
     uf_mart["motivo_sem_meta_uf"] = pd.Series(pd.NA, index=uf_mart.index, dtype="string")
     missing_uf = uf_mart["status_meta_uf"].eq("SEM_META")
     covered_uf_years = set(target_uf["ano"].dropna().astype(int))
@@ -329,6 +346,10 @@ def build_gold(silver: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
         municipality[["ano", "id_municipio", "sigla_uf", "serie", "rede", "taxa_alfabetizacao"]].rename(columns={"taxa_alfabetizacao": "taxa_oficial_publicada"}),
         on=["ano", "id_municipio", "sigla_uf", "serie", "rede"], how="left", validate="one_to_one", indicator=True,
     )
+    reconciliation["tem_registro_publicado"] = reconciliation["_merge"].eq("both")
+    reconciliation["status_correspondencia"] = "COMPARAVEL"
+    reconciliation.loc[~reconciliation["tem_registro_publicado"], "status_correspondencia"] = "SEM_REGISTRO_PUBLICADO"
+    reconciliation.loc[reconciliation["tem_registro_publicado"] & reconciliation["taxa_oficial_publicada"].isna(), "status_correspondencia"] = "REGISTRO_SEM_TAXA_PUBLICADA"
     reconciliation["diferenca_pontos_percentuais"] = reconciliation["taxa_calculada_microdados"] - reconciliation["taxa_oficial_publicada"]
     reconciliation["origem_dado"] = "calculado_microdados_vs_publicado"
 
