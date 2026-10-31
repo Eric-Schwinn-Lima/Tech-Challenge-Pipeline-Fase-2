@@ -8,6 +8,13 @@ from typing import Any
 
 import pandas as pd
 
+from .gold_metrics import (
+    build_goal_monitoring,
+    build_goal_trajectory,
+    build_proficiency_profile,
+    build_temporal_evolution,
+)
+
 
 ALIASES = {
     "ano": ["ano", "year", "ano_avaliacao", "ano_aplicacao"],
@@ -108,7 +115,9 @@ def normalize_table(table: str, df: pd.DataFrame) -> pd.DataFrame:
         df["serie"] = _normalize_series(df["serie"])
     if "rede" in df.columns:
         df["rede"] = _normalize_network(df["rede"])
-    for col in ("taxa_alfabetizacao", "meta_alfabetizacao", "peso_amostral", "proficiencia"):
+    numeric_columns = {"taxa_alfabetizacao", "meta_alfabetizacao", "peso_amostral", "proficiencia", "media_portugues"}
+    numeric_columns.update(col for col in df.columns if re.fullmatch(r"proporcao_aluno_nivel_[0-8]", col))
+    for col in numeric_columns:
         if col in df.columns:
             df[col] = _to_number(df[col])
     for col in ("presenca", "alfabetizado"):
@@ -262,11 +271,13 @@ def build_gold(silver: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     if municipality.empty:
         raise ValueError("Tabela municipio vazia: não é possível criar a Gold.")
 
-    target_muni = silver["meta_alfabetizacao_municipio"].rename(columns={"meta_alfabetizacao": "meta_municipio"})
-    fact = municipality.merge(target_muni[["ano", "id_municipio", "serie", "rede", "meta_municipio"]], on=["ano", "id_municipio", "serie", "rede"], how="left", validate="many_to_one")
+    target_muni = silver["meta_alfabetizacao_municipio"].rename(columns={"meta_alfabetizacao": "meta_municipio"}).copy()
+    target_muni["_meta_linha_encontrada_municipio"] = True
+    fact = municipality.merge(target_muni[["ano", "id_municipio", "serie", "rede", "meta_municipio", "_meta_linha_encontrada_municipio"]], on=["ano", "id_municipio", "serie", "rede"], how="left", validate="many_to_one")
 
-    target_uf = silver["meta_alfabetizacao_uf"].rename(columns={"meta_alfabetizacao": "meta_uf"})
-    fact = fact.merge(target_uf[["ano", "sigla_uf", "serie", "rede", "meta_uf"]], on=["ano", "sigla_uf", "serie", "rede"], how="left", validate="many_to_one")
+    target_uf = silver["meta_alfabetizacao_uf"].rename(columns={"meta_alfabetizacao": "meta_uf"}).copy()
+    target_uf["_meta_linha_encontrada_uf"] = True
+    fact = fact.merge(target_uf[["ano", "sigla_uf", "serie", "rede", "meta_uf", "_meta_linha_encontrada_uf"]], on=["ano", "sigla_uf", "serie", "rede"], how="left", validate="many_to_one")
     target_br = silver["meta_alfabetizacao_brasil"].rename(columns={"meta_alfabetizacao": "meta_brasil"})
     fact = fact.merge(target_br[["ano", "serie", "rede", "meta_brasil"]], on=["ano", "serie", "rede"], how="left", validate="many_to_one")
     fact["gap_meta_municipio_pp"] = fact["taxa_alfabetizacao"] - fact["meta_municipio"]
@@ -278,9 +289,18 @@ def build_gold(silver: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     have_target = comparable_muni & fact["meta_municipio"].notna() & fact["taxa_alfabetizacao"].notna()
     fact.loc[have_target & (fact["taxa_alfabetizacao"] >= fact["meta_municipio"]), "status_meta_municipio"] = "ATINGIDA"
     fact.loc[have_target & (fact["taxa_alfabetizacao"] < fact["meta_municipio"]), "status_meta_municipio"] = "ABAIXO_DA_META"
+    fact["motivo_sem_meta_municipio"] = pd.Series(pd.NA, index=fact.index, dtype="string")
+    missing_muni = fact["status_meta_municipio"].eq("SEM_META")
+    covered_muni_years = set(target_muni["ano"].dropna().astype(int))
+    year_covered_muni = fact["ano"].isin(covered_muni_years)
+    row_found_muni = fact["_meta_linha_encontrada_municipio"].fillna(False).astype(bool)
+    fact.loc[missing_muni & ~year_covered_muni, "motivo_sem_meta_municipio"] = "ANO_SEM_COBERTURA"
+    fact.loc[missing_muni & year_covered_muni & ~row_found_muni, "motivo_sem_meta_municipio"] = "LINHA_AUSENTE"
+    fact.loc[missing_muni & row_found_muni & fact["meta_municipio"].isna(), "motivo_sem_meta_municipio"] = "META_NULA_ORIGEM"
+    fact = fact.drop(columns=["_meta_linha_encontrada_municipio"])
     fact["origem_dado"] = "oficial_tabela_agregada"
 
-    uf_mart = silver["uf"].merge(target_uf[["ano", "sigla_uf", "serie", "rede", "meta_uf"]], on=["ano", "sigla_uf", "serie", "rede"], how="left", validate="many_to_one")
+    uf_mart = silver["uf"].merge(target_uf[["ano", "sigla_uf", "serie", "rede", "meta_uf", "_meta_linha_encontrada_uf"]], on=["ano", "sigla_uf", "serie", "rede"], how="left", validate="many_to_one")
     uf_mart = uf_mart.merge(target_br[["ano", "serie", "rede", "meta_brasil"]], on=["ano", "serie", "rede"], how="left", validate="many_to_one")
     uf_mart["gap_meta_uf_pp"] = uf_mart["taxa_alfabetizacao"] - uf_mart["meta_uf"]
     comparable_uf_networks = set(target_uf["rede"].dropna().astype(str))
@@ -291,6 +311,15 @@ def build_gold(silver: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     have_uf_target = comparable_uf & uf_mart["meta_uf"].notna() & uf_mart["taxa_alfabetizacao"].notna()
     uf_mart.loc[have_uf_target & (uf_mart["taxa_alfabetizacao"] >= uf_mart["meta_uf"]), "status_meta_uf"] = "ATINGIDA"
     uf_mart.loc[have_uf_target & (uf_mart["taxa_alfabetizacao"] < uf_mart["meta_uf"]), "status_meta_uf"] = "ABAIXO_DA_META"
+    uf_mart["motivo_sem_meta_uf"] = pd.Series(pd.NA, index=uf_mart.index, dtype="string")
+    missing_uf = uf_mart["status_meta_uf"].eq("SEM_META")
+    covered_uf_years = set(target_uf["ano"].dropna().astype(int))
+    year_covered_uf = uf_mart["ano"].isin(covered_uf_years)
+    row_found_uf = uf_mart["_meta_linha_encontrada_uf"].fillna(False).astype(bool)
+    uf_mart.loc[missing_uf & ~year_covered_uf, "motivo_sem_meta_uf"] = "ANO_SEM_COBERTURA"
+    uf_mart.loc[missing_uf & year_covered_uf & ~row_found_uf, "motivo_sem_meta_uf"] = "LINHA_AUSENTE"
+    uf_mart.loc[missing_uf & row_found_uf & uf_mart["meta_uf"].isna(), "motivo_sem_meta_uf"] = "META_NULA_ORIGEM"
+    uf_mart = uf_mart.drop(columns=["_meta_linha_encontrada_uf"])
     uf_mart["origem_dado"] = "oficial_tabela_agregada"
 
     microdata_indicator = silver["indicador_calculado_microdados"].copy()
@@ -303,12 +332,10 @@ def build_gold(silver: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     reconciliation["diferenca_pontos_percentuais"] = reconciliation["taxa_calculada_microdados"] - reconciliation["taxa_oficial_publicada"]
     reconciliation["origem_dado"] = "calculado_microdados_vs_publicado"
 
-    evolution = municipality.groupby(["ano", "serie", "rede"], dropna=False).agg(
-        media_simples_municipal_percentual=("taxa_alfabetizacao", "mean"),
-        municipios_com_resultado=("id_municipio", "nunique"),
-    ).reset_index()
-    evolution["indicador_agregado"] = "media_simples_municipal_nao_oficial"
-    evolution["origem_dado"] = "oficial_tabela_agregada_agregada_sem_ponderacao"
+    evolution = build_temporal_evolution(municipality)
+    proficiency_profile = build_proficiency_profile(municipality, silver["uf"])
+    goal_monitoring = build_goal_monitoring(fact, uf_mart)
+    goal_trajectory = build_goal_trajectory(silver)
 
     stream = silver.get("streaming_events", pd.DataFrame()).copy()
     if not stream.empty:
@@ -320,5 +347,8 @@ def build_gold(silver: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
         "mart_alfabetizacao_uf": uf_mart,
         "mart_evolucao_temporal": evolution,
         "reconciliacao_microdados": reconciliation,
+        "mart_perfil_proficiencia": proficiency_profile,
+        "mart_acompanhamento_metas": goal_monitoring,
+        "mart_trajetoria_metas": goal_trajectory,
         "mart_streaming_eventos": stream,
     }
