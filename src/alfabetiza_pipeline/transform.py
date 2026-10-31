@@ -303,7 +303,7 @@ def build_gold(silver: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     missing_muni = fact["status_meta_municipio"].eq("SEM_META")
     covered_muni_years = set(target_muni["ano"].dropna().astype(int))
     year_covered_muni = fact["ano"].isin(covered_muni_years)
-    row_found_muni = fact["_meta_linha_encontrada_municipio"].fillna(False).astype(bool)
+    row_found_muni = fact["_meta_linha_encontrada_municipio"].eq(True)
     fact.loc[missing_muni & ~year_covered_muni, "motivo_sem_meta_municipio"] = "ANO_SEM_COBERTURA"
     fact.loc[missing_muni & year_covered_muni & ~row_found_muni, "motivo_sem_meta_municipio"] = "LINHA_AUSENTE"
     fact.loc[missing_muni & row_found_muni & fact["meta_municipio"].isna(), "motivo_sem_meta_municipio"] = "META_NULA_ORIGEM"
@@ -333,7 +333,7 @@ def build_gold(silver: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     missing_uf = uf_mart["status_meta_uf"].eq("SEM_META")
     covered_uf_years = set(target_uf["ano"].dropna().astype(int))
     year_covered_uf = uf_mart["ano"].isin(covered_uf_years)
-    row_found_uf = uf_mart["_meta_linha_encontrada_uf"].fillna(False).astype(bool)
+    row_found_uf = uf_mart["_meta_linha_encontrada_uf"].eq(True)
     uf_mart.loc[missing_uf & ~year_covered_uf, "motivo_sem_meta_uf"] = "ANO_SEM_COBERTURA"
     uf_mart.loc[missing_uf & year_covered_uf & ~row_found_uf, "motivo_sem_meta_uf"] = "LINHA_AUSENTE"
     uf_mart.loc[missing_uf & row_found_uf & uf_mart["meta_uf"].isna(), "motivo_sem_meta_uf"] = "META_NULA_ORIGEM"
