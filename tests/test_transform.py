@@ -74,6 +74,7 @@ def test_gold_builds_target_monitoring_and_trajectory_marts():
         & (trajectory["ano_meta"] == 2025)
     ].iloc[0]
     assert float(target["variacao_meta_pp_ano_anterior"]) == 3.0
+    assert target["sigla_uf"] == "RS"
 
     monitoring = gold["mart_acompanhamento_metas"]
     municipal_rs_2024 = monitoring[
