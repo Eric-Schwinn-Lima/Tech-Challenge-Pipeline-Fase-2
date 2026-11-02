@@ -96,7 +96,9 @@ flowchart LR
     GOLD --> CRAWL[Glue Crawlers / Data Catalog]
     CRAWL --> ATH[Athena]
 
-    SFN[AWS Step Functions] -. orquestra o Glue .-> GLUE
+    SFN[AWS Step Functions] --> GLUE
+    SFN --> CRAWL
+    SFN --> ATH
     CW[CloudWatch] <-->|logs e métricas| LAMBDA
     GLUE --> CW
     CW --> SNS[Amazon SNS]
@@ -111,7 +113,7 @@ flowchart LR
 | Amazon SQS Standard | Fila de eventos de demonstração. |
 | AWS Lambda | Consome mensagens SQS, valida o timestamp, registra dados de ingestão e grava eventos JSONL na Bronze do S3. |
 | AWS Glue 4.0 / PySpark | Processa os CSVs canônicos, executa verificações e publica Silver/Gold em Parquet Snappy. |
-| AWS Step Functions | Orquestra a execução do job Glue. |
+| AWS Step Functions | Orquestra Glue, crawlers Silver/Gold, reparo de partições e Quality Gate no Athena. |
 | AWS Glue Data Catalog | Catálogo das tabelas Silver e Gold. |
 | Glue Crawlers | Descobrem esquemas e partições nos prefixos do S3. |
 | Amazon Athena | Consulta os dados catalogados usando SQL. |
@@ -396,7 +398,11 @@ As métricas customizadas são publicadas no namespace `AlfabetizacaoPipeline`: 
 Dispare a máquina Step Functions:
 
 ```powershell
-$executionArn = aws stepfunctions start-execution --state-machine-arn $stateMachine --query executionArn --output text --region us-east-2 --profile $env:AWS_PROFILE
+$executionArn = aws stepfunctions start-execution `
+    --state-machine-arn $stateMachine `
+    --query executionArn --output text `
+    --region us-east-2 --profile $env:AWS_PROFILE
+
 Write-Host "Execution ARN: $executionArn"
 ```
 
@@ -405,30 +411,27 @@ Acompanhe até a execução sair de `RUNNING`:
 ```powershell
 do {
     Start-Sleep -Seconds 10
-    $status = aws stepfunctions describe-execution --execution-arn $executionArn --query status --output text --region us-east-2 --profile $env:AWS_PROFILE
+    $status = aws stepfunctions describe-execution `
+        --execution-arn $executionArn `
+        --query status --output text `
+        --region us-east-2 --profile $env:AWS_PROFILE
     Write-Host "Status: $status"
 } while ($status -eq "RUNNING")
 
-aws stepfunctions describe-execution --execution-arn $executionArn --region us-east-2 --profile $env:AWS_PROFILE
+aws stepfunctions describe-execution `
+    --execution-arn $executionArn `
+    --region us-east-2 --profile $env:AWS_PROFILE
 ```
 
-Em caso de falha, consulte o histórico da máquina de estados, os logs do Glue e o relatório de qualidade em `observability/quality/` no S3.
+Quando a execução terminar com `SUCCEEDED`, o fluxo integrado terá concluído, em sequência, o job Glue, os crawlers Silver e Gold, os dois reparos de partições no Athena (`MSCK REPAIR TABLE`) e a consulta de validação das oito tabelas Gold. O Quality Gate encerra a máquina com sucesso somente quando o resultado da validação é `PASS`.
 
-### 8.7. Catalogar e consultar no Athena
+**Não inicie os crawlers manualmente após uma execução bem-sucedida dessa máquina:** eles já fazem parte da orquestração. Em caso de falha, consulte o histórico da Step Functions, os logs do Glue, o estado dos crawlers e o resultado/erro da consulta Athena.
 
-Após uma execução Glue bem-sucedida, inicie os crawlers:
+### 8.7. Consultar os resultados no Athena
 
-```powershell
-$silverCrawler = terraform -chdir=cloud/terraform output -raw silver_crawler_name
-$goldCrawler = terraform -chdir=cloud/terraform output -raw gold_crawler_name
+Após a Step Functions terminar com `SUCCEEDED`, consulte as tabelas no Athena usando o Glue Data Catalog Database e o workgroup criados pelo Terraform. A execução gera o `run_id`; use o identificador apresentado nos detalhes da execução, nos argumentos do Glue ou nos prefixos de saída no S3 para filtrar os resultados.
 
-aws glue start-crawler --name $silverCrawler --region us-east-2 --profile $env:AWS_PROFILE
-aws glue start-crawler --name $goldCrawler --region us-east-2 --profile $env:AWS_PROFILE
-```
-
-Aguarde os crawlers terminarem e consulte as tabelas no Athena usando o Glue Data Catalog Database e o workgroup criados pelo Terraform.
-
-Exemplo de consulta da fato municipal, filtrando a execução documentada:
+Exemplo com a execução aprovada de 02/11/2026:
 
 ```sql
 SELECT
@@ -440,7 +443,7 @@ SELECT
     gap_meta_municipio_pp,
     status_meta_municipio
 FROM fato_alfabetizacao_municipio
-WHERE run_id = '20261029T231856Z_37704ef5'
+WHERE run_id = 'd5095134-779d-453d-b55a-c67a020ca4f3'
 ORDER BY ano, sigla_uf, id_municipio
 LIMIT 100;
 ```
@@ -454,7 +457,7 @@ GROUP BY run_id
 ORDER BY run_id;
 ```
 
-Não execute consultas extensas sem filtros. Verifique os bytes escaneados no Athena e registre essa informação para FinOps. A tabela `mart_streaming_eventos` não deve ser consultada como resultado da execução AWS aqui documentada, pois não foi materializada nessa execução.
+A consulta automática de qualidade valida oito tabelas Gold. Na execução de referência de 02/11/2026, o resultado foi `PASS`, com 187.200 registros somados e um evento simulado na tabela `mart_streaming_eventos`. Esse evento operacional não representa uma taxa oficial de alfabetização. Evite consultas extensas sem filtros e registre os bytes escaneados para FinOps.
 
 ### 8.8. Limpeza dos recursos
 
@@ -471,7 +474,7 @@ Revise o plano de destruição e confirme no console AWS que os recursos foram r
 
 ## 9. Resultados de execução registrados
 
-Os resultados abaixo são evidências de execuções específicas e não uma garantia de que uma nova execução terá exatamente os mesmos números. A execução AWS mais recente registrada neste README utilizou o `run_id` indicado.
+Os resultados abaixo são evidências de execuções específicas e não uma garantia de que uma nova execução terá exatamente os mesmos números. A execução AWS histórica de 29/10 está descrita na seção 9.2. A execução integrada mais recente, concluída em 02/11/2026, está documentada na seção 9.4.
 
 ### 9.1. Execução local
 
@@ -544,7 +547,7 @@ Os 18.763 registros sem meta preenchida incluem situações de ausência de cobe
 - Athena: consulta de contagem da fato municipal retornou 23.995 linhas para o `run_id` documentado.
 - Step Functions: uma execução de validação da máquina de estados terminou com `SUCCEEDED`.
 
-Na implementação atual, a máquina Step Functions orquestra o job Glue. Os crawlers e as consultas Athena são executados separadamente após o processamento.
+Na execução histórica de 29/10/2026, a máquina Step Functions orquestrava somente o job Glue. Os crawlers e as consultas Athena eram executados separadamente após o processamento. Esse fluxo foi ampliado na implementação integrada documentada na seção 9.4.
 
 #### Streaming de teste
 
@@ -565,7 +568,29 @@ A branch de evolução da Gold acrescenta três marts analíticas e amplia a evo
 
 A \`mart_evolucao_temporal\` mantém a média simples municipal não oficial e acrescenta a variação anual em municípios pareados (mesma série e rede, anos consecutivos), incluindo contagens de melhoria, piora e estabilidade. A reconciliação explicita se existe registro publicado e se há taxa publicada disponível. A fato municipal e a mart de UF também passam a expor gap e status frente à meta nacional, respeitando o código de rede coberto pela meta Brasil.
 
-**Importante:** os números de execução AWS acima continuam sendo evidência histórica da versão que publicou quatro tabelas Gold. As novas marts estão no código desta branch e ainda precisam de execução local, testes e uma nova execução Glue/crawlers antes de serem apresentadas como resultados materializados na AWS. A soma dos níveis de proficiência é apenas diagnóstica; a taxa oficial de alfabetização não é reconstruída por soma de níveis.
+**Importante:** os números da seção 9.2 continuam sendo evidência histórica da execução AWS de 29/10/2026, que publicou quatro tabelas Gold. As novas marts e a tabela de streaming foram materializadas e verificadas na execução integrada de 02/11/2026, descrita na seção 9.4. A soma dos níveis de proficiência é apenas diagnóstica; a taxa oficial de alfabetização não é reconstruída pela soma dos níveis.
+
+### 9.4. Execução AWS integrada — 02/11/2026
+
+| Campo | Resultado |
+|---|---|
+| Data | 02/11/2026 |
+| Região | `us-east-2` |
+| Step Functions | `SUCCEEDED` |
+| Duração total | Aproximadamente 11 min 10 s |
+| `run_id` | `d5095134-779d-453d-b55a-c67a020ca4f3` |
+| Glue Job Run ID | `jr_72e1d75c775ccf77fc2675b98ffc00f12b5c3652f41068de5119dbe88e444fd7` |
+| Glue | `SUCCEEDED`, 371 s, 742 DPU-segundos |
+| Crawler Silver / Gold | `SUCCEEDED` / `SUCCEEDED` |
+| Athena — reparos | Duas consultas `MSCK REPAIR TABLE`, ambas `SUCCEEDED` |
+| Athena — Quality Gate | `PASS`; oito tabelas verificadas; 187.200 registros no total |
+| Streaming | Um evento simulado validado em `mart_streaming_eventos` |
+
+A execução da máquina de estados foi iniciada às 17:03:53 (UTC−03) e terminou às 17:15:03 (UTC−03). A consulta de validação Athena usou o Query Execution ID `94a4e66c-83d8-459a-baef-41777bfd36ce`. Os reparos de partição tiveram os IDs `400eb989-9ddf-4844-9e3c-a73272249ac1` (`fato_alfabetizacao_municipio`) e `cf993e91-5c07-4eaa-90d6-da0ab3eada84` (`mart_alfabetizacao_uf`).
+
+As oito tabelas Gold verificadas foram `fato_alfabetizacao_municipio`, `mart_alfabetizacao_uf`, `mart_evolucao_temporal`, `reconciliacao_microdados`, `mart_perfil_proficiencia`, `mart_acompanhamento_metas`, `mart_trajetoria_metas` e `mart_streaming_eventos`. O total de 187.200 é o total consolidado da consulta de qualidade; não se apresenta aqui uma distribuição por tabela específica dessa execução. O evento de streaming é simulado e operacional, não um indicador oficial de alfabetização.
+
+Na primeira tentativa integrada, o Glue concluiu com sucesso e a consulta Athena retornou `PASS`, mas a Step Functions falhou ao ler o resultado por um JSONPath incorreto (`$.gold_validation.QueryExecutionId`). O caminho foi corrigido para `$.gold_validation.QueryExecution.QueryExecutionId`. A execução descrita nesta seção é a repetição posterior, concluída com `SUCCEEDED`.
 
 ## 10. Limitações conhecidas e interpretação dos resultados
 

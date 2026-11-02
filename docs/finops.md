@@ -93,6 +93,34 @@ Como referência pública, a página de preços do AWS Glue apresenta US$ 0,44 p
 
 Esse cálculo é uma estimativa baseada no consumo reportado nas execuções do Glue e no preço de referência. Não é uma reconciliação de fatura.
 
+### 3.2.1 Execuções adicionais do ETL — 02/11/2026
+
+Esta subseção complementa a fotografia histórica de 1º a 29/10/2026. Foram medidas duas execuções adicionais do mesmo job Glue em 02/11/2026:
+
+| Execução | Estado Glue | Estado Step Functions | Duração Glue | `DPUSeconds` |
+|---|---|---|---:|---:|
+| Primeira tentativa integrada (`run_id` `117b9877-6796-4039-b56e-6ab35e6974f0`) | `SUCCEEDED` | `FAILED` na leitura final do resultado Athena por JSONPath incorreto | 321 s | 642 |
+| Execução corrigida (`run_id` `d5095134-779d-453d-b55a-c67a020ca4f3`) | `SUCCEEDED` | `SUCCEEDED` | 371 s | 742 |
+| **Total adicional** | **2 Glue `SUCCEEDED`** | **1 `SUCCEEDED`; 1 falha de orquestração após a validação Athena `PASS`** | **692 s** | **1.384** |
+
+A primeira tentativa não representa falha do processamento Glue: o job terminou com sucesso e o Quality Gate Athena retornou `PASS`; a falha da máquina ocorreu somente ao ler o identificador da consulta devido ao JSONPath `$.gold_validation.QueryExecutionId`. O caminho foi corrigido para `$.gold_validation.QueryExecution.QueryExecutionId`, e a execução seguinte concluiu a orquestração inteira.
+
+| Indicador acumulado do job Glue | Resultado |
+|---|---:|
+| DPU-segundos das cinco execuções históricas (seção 3.2) | 1.987 |
+| DPU-segundos das duas execuções de 02/11 | 1.384 |
+| **DPU-segundos das sete execuções** | **3.371** |
+| **DPU-horas acumuladas** | **0,936389 h** |
+| Referência de preço usada na seção 3.2 | US$ 0,44 por DPU-hora |
+| Estimativa adicional para as duas execuções de novembro | US$ 0,16916 |
+| **Estimativa acumulada para as sete execuções** | **US$ 0,41201** |
+
+Conversão: `3.371 / 3.600 = 0,936389 DPU-hora`. Aplicando a mesma referência histórica de US$ 0,44/DPU-hora, o cálculo ilustrativo é aproximadamente US$ 0,41201. Esse valor estima somente o consumo de DPU reportado pelas sete execuções do job Glue; não é custo faturado nem reconciliação da conta. A referência de preço pode variar por região e data.
+
+Na execução integrada corrigida, houve duas consultas Athena `MSCK REPAIR TABLE` e uma consulta de validação Gold, todas `SUCCEEDED`. Somando as duas tentativas de 02/11, foram executadas seis consultas Athena relacionadas a reparos e Quality Gate. Na execução corrigida, os Query Execution IDs foram `400eb989-9ddf-4844-9e3c-a73272249ac1` (fato municipal), `cf993e91-5c07-4eaa-90d6-da0ab3eada84` (mart UF) e `94a4e66c-83d8-459a-baef-41777bfd36ce` (validação). Não se converte essa contagem em custo: a fotografia de Cost Explorer desta documentação termina em outubro e não há aqui uma reconciliação de cobrança de novembro.
+
+Os `DPUSeconds` acima são do job ETL e não incluem consumo dos crawlers. Também não foram calculados nesta atualização os custos de transições da Step Functions, armazenamento/requisições S3, Lambda, SQS, Athena ou CloudWatch. O resultado `187.200 registros / 8 tabelas / PASS` é uma métrica de qualidade e não uma unidade de faturamento.
+
 ### 3.3 AWS Glue — Cost Explorer agregado
 
 A consulta do Cost Explorer para o serviço AWS Glue retornou as seguintes quantidades por tipo de uso:

@@ -1,0 +1,308 @@
+{
+  "Comment": "Pipeline Medallion: Glue, Crawlers, reparo de particoes e Quality Gate Athena.",
+  "StartAt": "GenerateRunId",
+  "States": {
+    "GenerateRunId": {
+      "Type": "Pass",
+      "Parameters": {
+        "run_id.$": "States.UUID()"
+      },
+      "Next": "RunMedallionGlueJob"
+    },
+    "RunMedallionGlueJob": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${glue_job_name}",
+        "Arguments": {
+          "--RUN_ID.$": "$.run_id"
+        }
+      },
+      "ResultPath": "$.glue",
+      "Retry": [
+        {
+          "ErrorEquals": ["Glue.ConcurrentRunsExceededException", "States.TaskFailed"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Next": "StartSilverCrawler"
+    },
+    "StartSilverCrawler": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+      "Parameters": {
+        "Name": "${silver_crawler_name}"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Glue.CrawlerRunningException"],
+          "IntervalSeconds": 15,
+          "MaxAttempts": 8,
+          "BackoffRate": 1.5
+        }
+      ],
+      "ResultPath": "$.silver_crawler_start",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Next": "WaitSilverCrawler"
+    },
+    "WaitSilverCrawler": {
+      "Type": "Wait",
+      "Seconds": 10,
+      "Next": "GetSilverCrawler"
+    },
+    "GetSilverCrawler": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:glue:getCrawler",
+      "Parameters": {
+        "Name": "${silver_crawler_name}"
+      },
+      "ResultPath": "$.silver_crawler",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Next": "CheckSilverCrawlerState"
+    },
+    "CheckSilverCrawlerState": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.silver_crawler.Crawler.State",
+          "StringEquals": "RUNNING",
+          "Next": "WaitSilverCrawler"
+        },
+        {
+          "Variable": "$.silver_crawler.Crawler.State",
+          "StringEquals": "STOPPING",
+          "Next": "WaitSilverCrawler"
+        },
+        {
+          "Variable": "$.silver_crawler.Crawler.State",
+          "StringEquals": "READY",
+          "Next": "CheckSilverCrawlerResult"
+        }
+      ],
+      "Default": "SilverCrawlerFailed"
+    },
+    "CheckSilverCrawlerResult": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.silver_crawler.Crawler.LastCrawl.Status",
+          "StringEquals": "SUCCEEDED",
+          "Next": "StartGoldCrawler"
+        }
+      ],
+      "Default": "SilverCrawlerFailed"
+    },
+    "SilverCrawlerFailed": {
+      "Type": "Fail",
+      "Error": "SilverCrawlerFailed",
+      "Cause": "O crawler Silver nao concluiu com sucesso. Consulte o Glue Data Catalog."
+    },
+    "StartGoldCrawler": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+      "Parameters": {
+        "Name": "${gold_crawler_name}"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Glue.CrawlerRunningException"],
+          "IntervalSeconds": 15,
+          "MaxAttempts": 8,
+          "BackoffRate": 1.5
+        }
+      ],
+      "ResultPath": "$.gold_crawler_start",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Next": "WaitGoldCrawler"
+    },
+    "WaitGoldCrawler": {
+      "Type": "Wait",
+      "Seconds": 10,
+      "Next": "GetGoldCrawler"
+    },
+    "GetGoldCrawler": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:glue:getCrawler",
+      "Parameters": {
+        "Name": "${gold_crawler_name}"
+      },
+      "ResultPath": "$.gold_crawler",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Next": "CheckGoldCrawlerState"
+    },
+    "CheckGoldCrawlerState": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.gold_crawler.Crawler.State",
+          "StringEquals": "RUNNING",
+          "Next": "WaitGoldCrawler"
+        },
+        {
+          "Variable": "$.gold_crawler.Crawler.State",
+          "StringEquals": "STOPPING",
+          "Next": "WaitGoldCrawler"
+        },
+        {
+          "Variable": "$.gold_crawler.Crawler.State",
+          "StringEquals": "READY",
+          "Next": "CheckGoldCrawlerResult"
+        }
+      ],
+      "Default": "GoldCrawlerFailed"
+    },
+    "CheckGoldCrawlerResult": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.gold_crawler.Crawler.LastCrawl.Status",
+          "StringEquals": "SUCCEEDED",
+          "Next": "RepairFactMunicipalPartitions"
+        }
+      ],
+      "Default": "GoldCrawlerFailed"
+    },
+    "GoldCrawlerFailed": {
+      "Type": "Fail",
+      "Error": "GoldCrawlerFailed",
+      "Cause": "O crawler Gold nao concluiu com sucesso. Consulte o Glue Data Catalog."
+    },
+    "RepairFactMunicipalPartitions": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "Parameters": {
+        "QueryString": "MSCK REPAIR TABLE fato_alfabetizacao_municipio",
+        "QueryExecutionContext": {
+          "Catalog": "awsdatacatalog",
+          "Database": "${database_name}"
+        },
+        "WorkGroup": "${workgroup_name}"
+      },
+      "ResultPath": "$.repair_fact",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Next": "RepairUfMartPartitions"
+    },
+    "RepairUfMartPartitions": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "Parameters": {
+        "QueryString": "MSCK REPAIR TABLE mart_alfabetizacao_uf",
+        "QueryExecutionContext": {
+          "Catalog": "awsdatacatalog",
+          "Database": "${database_name}"
+        },
+        "WorkGroup": "${workgroup_name}"
+      },
+      "ResultPath": "$.repair_uf",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Next": "ValidateGoldAthena"
+    },
+    "ValidateGoldAthena": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "Parameters": {
+        "QueryString.$": "States.Format('WITH counts AS ( SELECT \\'fato_alfabetizacao_municipio\\' AS table_name, COUNT(*) AS row_count FROM fato_alfabetizacao_municipio WHERE run_id = \\'{}\\' UNION ALL SELECT \\'mart_alfabetizacao_uf\\', COUNT(*) FROM mart_alfabetizacao_uf WHERE run_id = \\'{}\\' UNION ALL SELECT \\'mart_evolucao_temporal\\', COUNT(*) FROM mart_evolucao_temporal WHERE run_id = \\'{}\\' UNION ALL SELECT \\'mart_acompanhamento_metas\\', COUNT(*) FROM mart_acompanhamento_metas WHERE run_id = \\'{}\\' UNION ALL SELECT \\'mart_streaming_eventos\\', COUNT(*) FROM mart_streaming_eventos WHERE run_id = \\'{}\\' UNION ALL SELECT \\'reconciliacao_microdados\\', COUNT(*) FROM reconciliacao_microdados WHERE run_id = \\'{}\\' UNION ALL SELECT \\'mart_trajetoria_metas\\', COUNT(*) FROM mart_trajetoria_metas WHERE run_id = \\'{}\\' UNION ALL SELECT \\'mart_perfil_proficiencia\\', COUNT(*) FROM mart_perfil_proficiencia WHERE run_id = \\'{}\\' ) SELECT CASE WHEN COUNT(*) = 8 AND SUM(CASE WHEN table_name <> \\'mart_streaming_eventos\\' AND row_count > 0 THEN 1 ELSE 0 END) = 7 THEN \\'PASS\\' ELSE \\'FAIL\\' END AS quality_status, COUNT(*) AS tables_checked, COALESCE(SUM(row_count), 0) AS total_rows, COALESCE(MAX(CASE WHEN table_name = \\'mart_streaming_eventos\\' THEN row_count ELSE 0 END), 0) AS streaming_rows FROM counts', $.run_id, $.run_id, $.run_id, $.run_id, $.run_id, $.run_id, $.run_id, $.run_id)",
+        "QueryExecutionContext": {
+          "Catalog": "awsdatacatalog",
+          "Database": "${database_name}"
+        },
+        "WorkGroup": "${workgroup_name}"
+      },
+      "ResultPath": "$.gold_validation",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Next": "GetGoldValidationResults"
+    },
+    "GetGoldValidationResults": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:getQueryResults",
+      "Parameters": {
+        "QueryExecutionId.$": "$.gold_validation.QueryExecution.QueryExecutionId",
+        "MaxResults": 10
+      },
+      "ResultPath": "$.gold_validation_results",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Next": "GoldQualityGate"
+    },
+    "GoldQualityGate": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.gold_validation_results.ResultSet.Rows[1].Data[0].VarCharValue",
+          "StringEquals": "PASS",
+          "Next": "PipelineSucceeded"
+        }
+      ],
+      "Default": "GoldQualityGateFailed"
+    },
+    "GoldQualityGateFailed": {
+      "Type": "Fail",
+      "Error": "GoldQualityGateFailed",
+      "Cause": "Uma ou mais tabelas Gold obrigatorias estao vazias ou a consulta nao encontrou as oito tabelas esperadas."
+    },
+    "PipelineSucceeded": {
+      "Type": "Succeed"
+    },
+    "PipelineFailed": {
+      "Type": "Fail",
+      "Error": "PipelineExecutionFailed",
+      "Cause": "Consulte o historico da Step Functions, os logs do Glue e o Glue Data Catalog."
+    }
+  }
+}

@@ -232,11 +232,95 @@ resource "aws_iam_role" "step_functions" {
 resource "aws_iam_role_policy" "step_functions" {
   name = "${local.name}-sfn-glue-policy"
   role = aws_iam_role.step_functions.id
+
   policy = jsonencode({
-    Version = "2012-10-17",
+    Version = "2012-10-17"
     Statement = [
-      { Effect = "Allow", Action = ["glue:StartJobRun", "glue:GetJobRun", "glue:GetJobRuns", "glue:BatchStopJobRun"], Resource = aws_glue_job.pipeline.arn },
-      { Effect = "Allow", Action = ["events:PutTargets", "events:PutRule", "events:DescribeRule"], Resource = "arn:aws:events:${var.aws_region}:*:rule/StepFunctionsGetEventsForGlueJobRunTaskRule" }
+      {
+        Effect = "Allow"
+        Action = [
+          "glue:StartJobRun",
+          "glue:GetJobRun",
+          "glue:GetJobRuns",
+          "glue:BatchStopJobRun"
+        ]
+        Resource = aws_glue_job.pipeline.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "glue:StartCrawler",
+          "glue:GetCrawler"
+        ]
+        Resource = [
+          "arn:aws:glue:${var.aws_region}:${data.aws_caller_identity.current.account_id}:crawler/${aws_glue_crawler.silver.name}",
+          "arn:aws:glue:${var.aws_region}:${data.aws_caller_identity.current.account_id}:crawler/${aws_glue_crawler.gold.name}"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "athena:startQueryExecution",
+          "athena:stopQueryExecution",
+          "athena:getQueryExecution",
+          "athena:getQueryResults",
+          "athena:getDataCatalog",
+          "athena:GetWorkGroup",
+          "athena:BatchGetQueryExecution",
+          "athena:ListQueryExecutions"
+        ]
+        Resource = [
+          "arn:aws:athena:${var.aws_region}:${data.aws_caller_identity.current.account_id}:workgroup/${aws_athena_workgroup.analytics.name}",
+          "arn:aws:athena:${var.aws_region}:${data.aws_caller_identity.current.account_id}:datacatalog/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "glue:GetDatabase",
+          "glue:GetDatabases",
+          "glue:GetTable",
+          "glue:GetTables",
+          "glue:GetPartition",
+          "glue:GetPartitions",
+          "glue:BatchGetPartition",
+          "glue:CreatePartition",
+          "glue:BatchCreatePartition"
+        ]
+        Resource = [
+          "arn:aws:glue:${var.aws_region}:${data.aws_caller_identity.current.account_id}:catalog",
+          "arn:aws:glue:${var.aws_region}:${data.aws_caller_identity.current.account_id}:database/${aws_glue_catalog_database.analytics.name}",
+          "arn:aws:glue:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/${aws_glue_catalog_database.analytics.name}/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetBucketLocation",
+          "s3:ListBucket"
+        ]
+        Resource = aws_s3_bucket.lake.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject"
+        ]
+        Resource = [
+          "${aws_s3_bucket.lake.arn}/gold/*",
+          "${aws_s3_bucket.lake.arn}/athena-results/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "events:PutTargets",
+          "events:PutRule",
+          "events:DescribeRule"
+        ]
+        Resource = "arn:aws:events:${var.aws_region}:*:rule/StepFunctionsGetEventsForGlueJobRunTaskRule"
+      }
     ]
   })
 }
@@ -244,22 +328,15 @@ resource "aws_iam_role_policy" "step_functions" {
 resource "aws_sfn_state_machine" "pipeline" {
   name     = "${local.name}-pipeline-orchestrator"
   role_arn = aws_iam_role.step_functions.arn
-  definition = jsonencode({
-    Comment = "Executa o job Glue da pipeline híbrida de alfabetização.",
-    StartAt = "RunMedallionGlueJob",
-    States = {
-      RunMedallionGlueJob = {
-        Type       = "Task",
-        Resource   = "arn:aws:states:::glue:startJobRun.sync",
-        Parameters = { JobName = aws_glue_job.pipeline.name },
-        Retry      = [{ ErrorEquals = ["Glue.ConcurrentRunsExceededException", "States.TaskFailed"], IntervalSeconds = 30, MaxAttempts = 2, BackoffRate = 2.0 }],
-        Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.error", Next = "PipelineFailed" }],
-        Next       = "PipelineSucceeded"
-      },
-      PipelineSucceeded = { Type = "Succeed" },
-      PipelineFailed    = { Type = "Fail", Error = "PipelineExecutionFailed", Cause = "Consulte os logs do job Glue e o relatório de qualidade." }
-    }
+
+  definition = templatefile("${path.module}/state_machine.asl.json.tftpl", {
+    glue_job_name       = aws_glue_job.pipeline.name
+    silver_crawler_name = aws_glue_crawler.silver.name
+    gold_crawler_name   = aws_glue_crawler.gold.name
+    database_name       = aws_glue_catalog_database.analytics.name
+    workgroup_name      = aws_athena_workgroup.analytics.name
   })
+
   depends_on = [aws_iam_role_policy.step_functions]
 }
 

@@ -1,287 +1,595 @@
-"""AWS Glue 4.0 Spark job. Inputs are canonical CSVs in S3; outputs are run-versioned Parquet."""
+
+
 import sys
+
 import uuid
+
 import json
+
 from datetime import datetime, timezone
 
+
+
 import boto3
+
 from awsglue.utils import getResolvedOptions
+
 from pyspark.sql import SparkSession, functions as F, Window
-from pyspark.sql.utils import AnalysisException
+
+
+
 
 args = getResolvedOptions(sys.argv, ["JOB_NAME", "SOURCE_PREFIX", "STREAM_PREFIX", "OUTPUT_PREFIX", "GOLD_PREFIX", "MIN_JOIN_MATCH_RATE", "MAX_INVALID_WEIGHT_RATE"])
+
 spark = SparkSession.builder.getOrCreate()
+
 spark.sparkContext.setLogLevel("WARN")
+spark.conf.set("spark.sql.session.timeZone", "UTC")
+
 s3 = boto3.client("s3")
-run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
+
+if "--RUN_ID" in sys.argv:
+    run_id = getResolvedOptions(sys.argv, ["RUN_ID"])["RUN_ID"]
+else:
+    run_id = (
+        datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        + "_" + uuid.uuid4().hex[:8]
+    )
+
+if (
+    not run_id
+    or len(run_id) > 128
+    or not all(char.isalnum() or char in "_-" for char in run_id)
+):
+    raise ValueError("RUN_ID invalido.")
+
+
 pipeline_started_at = datetime.now(timezone.utc)
+
 source_prefix = args["SOURCE_PREFIX"].rstrip("/")
+
 stream_prefix = args["STREAM_PREFIX"].rstrip("/")
+
 output_prefix = args["OUTPUT_PREFIX"].rstrip("/")
+
 gold_prefix = args["GOLD_PREFIX"].rstrip("/")
+
 min_match = float(args["MIN_JOIN_MATCH_RATE"])
+
 max_invalid_weight_rate = float(args["MAX_INVALID_WEIGHT_RATE"])
+
 lake_bucket = source_prefix.split("/")[2]
+
 quality_checks = []
+
 frames = {}
+
 gold_outputs = {}
 
+
+
 def write_run_metrics(status, error=None):
+
     finished = datetime.now(timezone.utc)
+
     row_counts = {name: frame.count() for name, frame in frames.items()}
+
     gold_counts = {name: frame.count() for name, frame in gold_outputs.items()}
+
     metric_body = {
+
         "run_id": run_id,
+
         "status": status,
+
         "started_at": pipeline_started_at.isoformat().replace("+00:00", "Z"),
+
         "finished_at": finished.isoformat().replace("+00:00", "Z"),
+
         "duration_seconds": (finished - pipeline_started_at).total_seconds(),
+
         "source_rows": row_counts,
+
         "gold_rows": gold_counts,
+
         "join_rate_students_municipio": globals().get("match_rate"),
+
         "join_rate_municipio_uf": globals().get("uf_rate"),
+
         "error": error,
+
     }
+
     s3.put_object(Bucket=lake_bucket, Key=f"observability/metrics/run_id={run_id}.json", Body=json.dumps(metric_body, ensure_ascii=False, indent=2).encode("utf-8"), ContentType="application/json")
 
+
+
 def write_quality_report(status, error=None):
+
     body = {
+
         "run_id": run_id,
+
         "checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+
         "status": status,
+
         "error": error,
+
         "checks": quality_checks,
+
     }
+
     s3.put_object(Bucket=lake_bucket, Key=f"observability/quality/run_id={run_id}.json", Body=json.dumps(body, ensure_ascii=False, indent=2).encode("utf-8"), ContentType="application/json")
 
+
+
 def record_check(name, passed, measured, threshold, detail=""):
+
     quality_checks.append({"check_name": name, "severity": "BLOCKING", "status": "PASS" if passed else "FAIL", "measured": measured, "threshold": threshold, "detail": detail})
+
     if not passed:
+
         fail(f"{name}: measured={measured}; threshold={threshold}; {detail}")
 
+
+
 tables = ["uf", "municipio", "meta_alfabetizacao_brasil", "meta_alfabetizacao_uf", "meta_alfabetizacao_municipio", "alunos"]
+
 required = {
+
     "uf": ["ano", "sigla_uf", "serie", "rede", "taxa_alfabetizacao"],
+
     "municipio": ["ano", "id_municipio", "sigla_uf", "serie", "rede", "taxa_alfabetizacao"],
+
     "meta_alfabetizacao_brasil": ["ano", "serie", "rede", "meta_alfabetizacao"],
+
     "meta_alfabetizacao_uf": ["ano", "sigla_uf", "serie", "rede", "meta_alfabetizacao"],
+
     "meta_alfabetizacao_municipio": ["ano", "id_municipio", "serie", "rede", "meta_alfabetizacao"],
+
     "alunos": ["id_aluno", "ano", "id_municipio", "sigla_uf", "serie", "rede", "presenca", "alfabetizado", "peso_amostral"],
+
 }
+
+
 
 def fail(message):
+
     quality_checks.append({"check_name": "quality_gate_exception", "severity": "BLOCKING", "status": "FAIL", "measured": message, "threshold": "all blocking rules pass", "detail": "A camada seguinte não deve ser publicada."})
+
     try:
+
         write_quality_report("FAILED", error=message)
+
         write_run_metrics("FAILED", error=message)
+
     except Exception as report_error:
+
         print(f"Could not persist quality/metrics report to S3: {report_error}")
+
     raise RuntimeError("QUALITY_GATE_BLOCKED: " + message)
 
+
+
 def require_columns(name, df):
+
     missing = [c for c in required[name] if c not in df.columns]
+
     if missing:
+
         fail(f"Tabela {name} sem colunas obrigatórias: {missing}")
+
     row_count = df.count()
+
     record_check(f"required_table_non_empty:{name}", row_count > 0, row_count, "> 0", "Entidade obrigatória precisa ser usada na pipeline.")
 
+
+
 def normalize(df):
+
     if "id_municipio" in df.columns:
+
         df = df.withColumn("id_municipio", F.lpad(F.regexp_replace(F.col("id_municipio").cast("string"), r"\.0$", ""), 7, "0"))
+
     if "sigla_uf" in df.columns:
+
         df = df.withColumn("sigla_uf", F.upper(F.trim(F.col("sigla_uf").cast("string"))))
+
     for col in ["ano"]:
+
         if col in df.columns:
+
             df = df.withColumn(col, F.col(col).cast("int"))
-    numeric_columns = ["taxa_alfabetizacao", "meta_alfabetizacao", "peso_amostral", "proficiencia", "media_portugues"]
-    numeric_columns += [f"proporcao_aluno_nivel_{level}" for level in range(9)]
+
+    numeric_columns = [
+        "taxa_alfabetizacao", "meta_alfabetizacao", "peso_amostral",
+        "proficiencia", "media_portugues",
+    ] + [f"proporcao_aluno_nivel_{level}" for level in range(9)]
     for col in numeric_columns:
         if col in df.columns:
-            df = df.withColumn(col, F.regexp_replace(F.col(col).cast("string"), ",", ".").cast("double"))
+            df = df.withColumn(
+                col,
+                F.regexp_replace(F.col(col).cast("string"), ",", ".").cast("double"),
+            )
+
     for col in ["serie", "rede"]:
+
         if col in df.columns:
+
             df = df.withColumn(col, F.lower(F.trim(F.col(col).cast("string"))))
+
     for col in ["presenca", "alfabetizado"]:
+
         if col in df.columns:
+
             x = F.lower(F.trim(F.col(col).cast("string")))
+
             df = df.withColumn(col, F.when(x.isin("1", "true", "sim", "s", "presente", "yes"), F.lit(1.0)).when(x.isin("0", "false", "nao", "não", "n", "ausente", "no"), F.lit(0.0)).otherwise(x.cast("double")))
+
     return df
 
+
+
 for name in tables:
+
     path = f"{source_prefix}/{name}.csv"
+
     frame = spark.read.option("header", True).option("inferSchema", False).csv(path)
+
     frame = normalize(frame)
+
     require_columns(name, frame)
+
     frames[name] = frame
 
+
+
 # Load the official reference dictionary. It is auxiliary to the six required business
+
 # entities but is used in the transformation, and is retained in Silver for lineage.
+
 dictionary_path = f"{source_prefix}/dicionario.csv"
+
 dictionary = spark.read.option("header", True).option("inferSchema", False).csv(dictionary_path)
+
 required_dictionary_columns = ["id_tabela", "nome_coluna", "chave", "cobertura_temporal", "valor"]
+
 missing_dictionary_columns = [c for c in required_dictionary_columns if c not in dictionary.columns]
+
 if missing_dictionary_columns:
+
     fail(f"Tabela dicionario sem colunas obrigatórias: {missing_dictionary_columns}")
+
 dictionary = dictionary.select(*required_dictionary_columns)
-dictionary = dictionary.withColumn("id_tabela", F.lower(F.trim(F.col("id_tabela")))) \
-    .withColumn("nome_coluna", F.lower(F.trim(F.col("nome_coluna")))) \
-    .withColumn("chave", F.trim(F.col("chave"))) \
+
+dictionary = (
+    dictionary
+    .withColumn("id_tabela", F.lower(F.trim(F.col("id_tabela"))))
+    .withColumn("nome_coluna", F.lower(F.trim(F.col("nome_coluna"))))
+    .withColumn("chave", F.trim(F.col("chave")))
     .withColumn("valor", F.trim(F.col("valor")))
+)
+
 dictionary_rows = dictionary.count()
+
 record_check("required_reference_table_non_empty:dicionario", dictionary_rows > 0, dictionary_rows, "> 0", "O dicionário oficial precisa estar disponível para traduzir códigos de categoria.")
+
 frames["dicionario"] = dictionary
 
+
+
 # Add official descriptions but never replace coded keys used by joins. Some target tables
+
 # use short textual network labels; their code mapping is handled by prepare_real_data.py
+
 # from the same dictionary, with the semantic alias documented in README.
+
 def _dictionary_key(column):
+
     return F.regexp_replace(F.trim(F.col(column).cast("string")), r"\.0$", "")
 
+
+
 entity_dictionary = {
+
     "alunos": "alunos",
+
     "municipio": "municipio",
+
     "uf": "uf",
+
     "meta_alfabetizacao_municipio": "municipio",
+
     "meta_alfabetizacao_uf": "uf",
+
     "meta_alfabetizacao_brasil": "uf",
+
 }
+
 for table_name, dictionary_entity in entity_dictionary.items():
+
     frame = frames[table_name]
+
     for category_column in ["rede", "serie", "presenca", "alfabetizado", "preenchimento_caderno"]:
+
         if category_column not in frame.columns:
+
             continue
+
         lookup = dictionary.filter(
+
             (F.col("id_tabela") == dictionary_entity) & (F.col("nome_coluna") == category_column)
+
         ).select(
+
             F.regexp_replace(F.trim(F.col("chave")), r"\.0$", "").alias("__dictionary_key"),
+
             F.col("valor").alias(f"{category_column}_descricao"),
+
         ).dropDuplicates(["__dictionary_key"])
+
         if lookup.limit(1).count() == 0:
+
             continue
+
         temp_key = f"__{category_column}_dictionary_key"
+
         frame = frame.withColumn(temp_key, _dictionary_key(category_column))
+
         frame = frame.join(lookup, frame[temp_key] == lookup["__dictionary_key"], "left").drop(temp_key, "__dictionary_key")
+
     frames[table_name] = frame
 
+
+
 # Blocking structural and integrity checks before publishing the layer.
+
 keysets = {
+
     "uf": ["ano", "sigla_uf", "serie", "rede"],
+
     "municipio": ["ano", "id_municipio", "serie", "rede"],
+
     "meta_alfabetizacao_brasil": ["ano", "serie", "rede"],
+
     "meta_alfabetizacao_uf": ["ano", "sigla_uf", "serie", "rede"],
+
     "meta_alfabetizacao_municipio": ["ano", "id_municipio", "serie", "rede"],
+
     "alunos": ["id_aluno", "ano", "id_municipio", "serie", "rede"],
+
 }
+
 for name, keys in keysets.items():
+
     df = frames[name]
+
     missing = df.filter(F.expr(" OR ".join([f"`{k}` IS NULL OR trim(cast(`{k}` as string)) = ''" for k in keys]))).count()
+
     record_check(f"missing_keys:{name}", missing == 0, missing, 0, f"Chaves avaliadas: {keys}")
+
     duplicates = df.groupBy(*keys).count().filter(F.col("count") > 1).count()
+
     record_check(f"duplicate_natural_keys:{name}", duplicates == 0, duplicates, 0, f"Chaves: {keys}")
+
 for name, df in frames.items():
+
     missing_counts = {}
+
     for column in df.columns:
+
         missing_count = df.filter(F.col(column).isNull() | (F.trim(F.col(column).cast("string")) == "")).count()
+
         if missing_count:
+
             missing_counts[column] = missing_count
+
     quality_checks.append({"check_name": f"missing_values:{name}", "severity": "INFO", "status": "INFO", "measured": missing_counts, "threshold": "registrar ausências", "detail": "As variáveis críticas têm verificações bloqueantes separadas."})
 
-# Proficiency distributions are present in the official aggregates. Validate every
-# provided level independently; row-sum deviations remain diagnostic until source
-# rounding and coverage tolerance are confirmed.
+
+
+# Validate each proficiency share independently; sum deviations are diagnostic because
+# source percentages can be rounded and are not used to reconstruct the official rate.
 for name in ["uf", "municipio"]:
-    level_columns = [f"proporcao_aluno_nivel_{level}" for level in range(9) if f"proporcao_aluno_nivel_{level}" in frames[name].columns]
+    level_columns = [
+        f"proporcao_aluno_nivel_{level}" for level in range(9)
+        if f"proporcao_aluno_nivel_{level}" in frames[name].columns
+    ]
     if level_columns:
         invalid_levels = frames[name].filter(
-            F.expr(" OR ".join([f"({col} IS NOT NULL AND NOT ({col} BETWEEN 0 AND 100))" for col in level_columns]))
+            F.expr(" OR ".join([
+                f"({column} IS NOT NULL AND NOT ({column} BETWEEN 0 AND 100))"
+                for column in level_columns
+            ]))
         ).count()
-        record_check(f"proficiency_level_range:{name}", invalid_levels == 0, invalid_levels, 0, "Cada proporção de nível deve estar entre 0 e 100.")
-        total_expr = sum([F.coalesce(F.col(col), F.lit(0.0)) for col in level_columns])
-        rows_with_levels = frames[name].filter(F.expr(" OR ".join([f"{col} IS NOT NULL" for col in level_columns])))
+        record_check(
+            f"proficiency_level_range:{name}", invalid_levels == 0,
+            invalid_levels, 0, "Cada proporção de nível deve estar entre 0 e 100.",
+        )
+        total_expr = sum([
+            F.coalesce(F.col(column), F.lit(0.0)) for column in level_columns
+        ])
+        rows_with_levels = frames[name].filter(
+            F.expr(" OR ".join([f"{column} IS NOT NULL" for column in level_columns]))
+        )
         total_outside = rows_with_levels.filter(~total_expr.between(99.0, 101.0)).count()
-        quality_checks.append({"check_name": f"proficiency_levels_sum_diagnostic:{name}", "severity": "INFO", "status": "INFO", "measured": total_outside, "threshold": "diagnóstico; validar tolerância na fonte", "detail": "Soma das proporções não é bloqueante até confirmar arredondamento e cobertura na origem."})
+        quality_checks.append({
+            "check_name": f"proficiency_levels_sum_diagnostic:{name}",
+            "severity": "INFO", "status": "INFO", "measured": total_outside,
+            "threshold": "diagnóstico; validar tolerância na fonte",
+            "detail": "Soma das proporções não é bloqueante até confirmar arredondamento e cobertura na origem.",
+        })
 
 for name in ["uf", "municipio"]:
+
     bad = frames[name].filter(F.col("taxa_alfabetizacao").isNotNull() & ~F.col("taxa_alfabetizacao").between(0, 100)).count()
+
     record_check(f"percentage_range:{name}", bad == 0, bad, 0, "Percentuais entre 0 e 100.")
+
 for name in ["meta_alfabetizacao_brasil", "meta_alfabetizacao_uf", "meta_alfabetizacao_municipio"]:
+
     bad = frames[name].filter(F.col("meta_alfabetizacao").isNotNull() & ~F.col("meta_alfabetizacao").between(0, 100)).count()
+
     record_check(f"target_range:{name}", bad == 0, bad, 0, "Metas entre 0 e 100.")
+
+
 
 student_rows = frames["alunos"]
 for column in ["presenca", "alfabetizado"]:
-    invalid_binary = student_rows.filter(F.col(column).isNotNull() & ~F.col(column).isin(0, 1)).count()
-    record_check(f"binary_domain:alunos.{column}", invalid_binary == 0, invalid_binary, 0, "Valores válidos são 0/1; nulos são avaliados por regras específicas.")
+    invalid_binary = student_rows.filter(
+        F.col(column).isNotNull() & ~F.col(column).isin(0, 1)
+    ).count()
+    record_check(
+        f"binary_domain:alunos.{column}", invalid_binary == 0,
+        invalid_binary, 0, "Valores válidos são 0/1; nulos são avaliados por regras específicas.",
+    )
+
 missing_presence = student_rows.filter(F.col("presenca").isNull()).count()
+
 record_check("missing_presence:alunos", missing_presence == 0, missing_presence, 0, "Presença traduzida pelo dicionário oficial.")
+
 present_rows = student_rows.filter(F.col("presenca") == 1)
+
 missing_status = present_rows.filter(F.col("alfabetizado").isNull()).count()
+
 record_check("missing_literacy_status:present_students", missing_status == 0, missing_status, 0, "Resultado obrigatório para aluno presente/avaliado.")
+
 invalid_weights = present_rows.filter(F.col("peso_amostral").isNull() | (F.col("peso_amostral") <= 0)).count()
+
 present_count = present_rows.count()
+
 invalid_weight_rate = invalid_weights / present_count if present_count else 0.0
+
 record_check(
+
     "valid_sample_weight_rate:present_students", invalid_weight_rate <= max_invalid_weight_rate,
+
     round(invalid_weight_rate, 6), f"<= {max_invalid_weight_rate:.4f}",
+
     f"{invalid_weights}/{present_count} pesos ausentes/não positivos; linhas inelegíveis são excluídas do indicador.",
+
 )
+
 quality_checks.append({"check_name": "invalid_sample_weight_count:present_students", "severity": "INFO", "status": "INFO", "measured": invalid_weights, "threshold": "registrar e excluir do cálculo", "detail": "Peso ausente não é convertido em zero."})
 
+
+
 municipio = frames["municipio"]
+
 uf = frames["uf"]
+
 alunos = frames["alunos"]
+
 student_groups = alunos.select("ano", "id_municipio", "serie", "rede").distinct()
+
 comparable_networks = {r[0] for r in alunos.select("rede").distinct().collect()} & {r[0] for r in municipio.select("rede").distinct().collect()}
+
 not_comparable = student_groups.filter(~F.col("rede").isin(sorted(comparable_networks))).count() if comparable_networks else student_groups.count()
+
 quality_checks.append({"check_name": "student_network_groups_not_comparable_to_aggregates", "severity": "INFO", "status": "INFO", "measured": not_comparable, "threshold": "documentar categorias sem par", "detail": f"Categorias sem correspondência na tabela agregada: {sorted({r[0] for r in alunos.select('rede').distinct().collect()} - comparable_networks)}"})
+
 student_groups = student_groups.filter(F.col("rede").isin(sorted(comparable_networks)))
+
 joined = student_groups.join(municipio.select("ano", "id_municipio", "serie", "rede").distinct(), ["ano", "id_municipio", "serie", "rede"], "left_semi").count()
+
 total = student_groups.count()
+
 match_rate = joined / total if total else 1.0
+
 record_check("join_match:alunos_to_municipio", match_rate >= min_match, round(match_rate, 4), f">= {min_match:.4f}", f"{joined}/{total} grupos comparáveis de alunos encontrados no indicador municipal.")
 
+
+
 municipio_groups = municipio.select("ano", "sigla_uf", "serie", "rede").distinct()
+
 matched_uf = municipio_groups.join(uf.select("ano", "sigla_uf", "serie", "rede").distinct(), ["ano", "sigla_uf", "serie", "rede"], "left_semi").count()
+
 total_uf = municipio_groups.count()
+
 uf_rate = matched_uf / total_uf if total_uf else 1.0
+
 record_check("join_match:municipio_to_uf", uf_rate >= min_match, round(uf_rate, 4), f">= {min_match:.4f}", f"{matched_uf}/{total_uf} recortes encontrados no agregado estadual.")
 
+
+
 for target_name, keys in [
+
     ("meta_alfabetizacao_municipio", ["ano", "id_municipio", "serie", "rede"]),
+
     ("meta_alfabetizacao_uf", ["ano", "sigla_uf", "serie", "rede"]),
+
     ("meta_alfabetizacao_brasil", ["ano", "serie", "rede"]),
+
 ]:
+
     target = frames[target_name]
+
     covered_years = [r[0] for r in target.select("ano").distinct().collect()]
+
     eligible = municipio.filter(F.col("ano").isin(covered_years))
+
     if "rede" in keys:
+
         target_networks = [r[0] for r in target.select("rede").distinct().collect()]
+
         eligible = eligible.filter(F.col("rede").isin(target_networks))
+
     eligible = eligible.select(*keys).distinct()
+
     target_keys = target.select(*keys).distinct()
+
     eligible_total = eligible.count()
+
     eligible_matched = eligible.join(target_keys, keys, "left_semi").count()
+
     coverage = eligible_matched / eligible_total if eligible_total else 1.0
+
     record_check(f"join_match:municipio_to_{target_name}", coverage >= min_match, round(coverage, 4), f">= {min_match:.4f}", f"{eligible_matched}/{eligible_total} recortes elegíveis; anos cobertos pela meta: {sorted(covered_years)}")
+
+
 
 write_quality_report("PASSED")
 
+
+
 # Student microdata: include only evaluated/present students with a valid sample weight.
+
 assessed = alunos.filter((F.col("presenca") == 1) & F.col("alfabetizado").isNotNull() & (F.col("peso_amostral") > 0))
+
 calculated = assessed.groupBy("ano", "id_municipio", "sigla_uf", "serie", "rede").agg(
+
     (F.sum(F.col("alfabetizado") * F.col("peso_amostral")) / F.sum("peso_amostral") * 100).alias("taxa_calculada_microdados"),
+
     F.sum("peso_amostral").alias("peso_avaliado"), F.count("id_aluno").alias("alunos_avaliados"),
+
 )
 
-# Build Gold by joining all three target tables into the municipal fact.
-meta_mun = frames["meta_alfabetizacao_municipio"].select("ano", "id_municipio", "serie", "rede", F.col("meta_alfabetizacao").alias("meta_municipio")).withColumn("__meta_linha_municipal", F.lit(True))
-meta_uf = frames["meta_alfabetizacao_uf"].select("ano", "sigla_uf", "serie", "rede", F.col("meta_alfabetizacao").alias("meta_uf")).withColumn("__meta_linha_uf", F.lit(True))
-meta_br = frames["meta_alfabetizacao_brasil"].select("ano", "serie", "rede", F.col("meta_alfabetizacao").alias("meta_brasil"))
-municipal_target_years = [r[0] for r in meta_mun.select("ano").distinct().collect()]
-uf_target_years = [r[0] for r in meta_uf.select("ano").distinct().collect()]
-fact = municipio.join(meta_mun, ["ano", "id_municipio", "serie", "rede"], "left").join(meta_uf, ["ano", "sigla_uf", "serie", "rede"], "left").join(meta_br, ["ano", "serie", "rede"], "left")
+
+
+# Build Gold by joining the official municipal, UF and Brazil targets.
+meta_mun = frames["meta_alfabetizacao_municipio"].select(
+    "ano", "id_municipio", "serie", "rede",
+    F.col("meta_alfabetizacao").alias("meta_municipio"),
+).withColumn("__meta_linha_municipal", F.lit(True))
+meta_uf = frames["meta_alfabetizacao_uf"].select(
+    "ano", "sigla_uf", "serie", "rede",
+    F.col("meta_alfabetizacao").alias("meta_uf"),
+).withColumn("__meta_linha_uf", F.lit(True))
+meta_br = frames["meta_alfabetizacao_brasil"].select(
+    "ano", "serie", "rede", F.col("meta_alfabetizacao").alias("meta_brasil")
+)
+municipal_target_years = [row[0] for row in meta_mun.select("ano").distinct().collect()]
+uf_target_years = [row[0] for row in meta_uf.select("ano").distinct().collect()]
+
+fact = (
+    municipio
+    .join(meta_mun, ["ano", "id_municipio", "serie", "rede"], "left")
+    .join(meta_uf, ["ano", "sigla_uf", "serie", "rede"], "left")
+    .join(meta_br, ["ano", "serie", "rede"], "left")
+)
 fact = fact.withColumn("gap_meta_municipio_pp", F.col("taxa_alfabetizacao") - F.col("meta_municipio"))
-municipal_target_networks = [r[0] for r in meta_mun.select("rede").distinct().collect()]
+municipal_target_networks = [row[0] for row in meta_mun.select("rede").distinct().collect()]
 fact = fact.withColumn(
     "status_meta_municipio",
     F.when(~F.col("rede").isin(municipal_target_networks), "NAO_COMPARAVEL")
@@ -298,7 +606,7 @@ fact = fact.withColumn(
      .otherwise(F.lit("META_NULA_ORIGEM")),
 )
 fact = fact.withColumn("gap_meta_brasil_pp", F.col("taxa_alfabetizacao") - F.col("meta_brasil"))
-national_target_networks = [r[0] for r in meta_br.select("rede").distinct().collect()]
+national_target_networks = [row[0] for row in meta_br.select("rede").distinct().collect()]
 fact = fact.withColumn(
     "status_meta_brasil",
     F.when(~F.col("rede").isin(national_target_networks), "NAO_COMPARAVEL")
@@ -309,9 +617,12 @@ fact = fact.withColumn(
 ).drop("__meta_linha_municipal", "__meta_linha_uf")
 fact = fact.withColumn("origem_dado", F.lit("oficial_tabela_agregada"))
 
-uf_mart = uf.join(meta_uf, ["ano", "sigla_uf", "serie", "rede"], "left").join(meta_br, ["ano", "serie", "rede"], "left")
+uf_mart = (
+    uf.join(meta_uf, ["ano", "sigla_uf", "serie", "rede"], "left")
+      .join(meta_br, ["ano", "serie", "rede"], "left")
+)
 uf_mart = uf_mart.withColumn("gap_meta_uf_pp", F.col("taxa_alfabetizacao") - F.col("meta_uf"))
-uf_target_networks = [r[0] for r in meta_uf.select("rede").distinct().collect()]
+uf_target_networks = [row[0] for row in meta_uf.select("rede").distinct().collect()]
 uf_mart = uf_mart.withColumn(
     "status_meta_uf",
     F.when(~F.col("rede").isin(uf_target_networks), "NAO_COMPARAVEL")
@@ -338,33 +649,49 @@ uf_mart = uf_mart.withColumn(
 ).drop("__meta_linha_uf")
 uf_mart = uf_mart.withColumn("origem_dado", F.lit("oficial_tabela_agregada"))
 
-comparable_rede_values = [r[0] for r in municipio.select("rede").distinct().collect()]
+comparable_rede_values = [row[0] for row in municipio.select("rede").distinct().collect()]
 calculated_comparable = calculated.filter(F.col("rede").isin(comparable_rede_values))
 published = municipio.select(
     "ano", "id_municipio", "sigla_uf", "serie", "rede",
     F.col("taxa_alfabetizacao").alias("taxa_oficial_publicada"),
 ).withColumn("__registro_publicado_encontrado", F.lit(True))
-reconciliation = calculated_comparable.join(published, ["ano", "id_municipio", "sigla_uf", "serie", "rede"], "left")
-reconciliation = reconciliation.withColumn("tem_registro_publicado", F.coalesce(F.col("__registro_publicado_encontrado"), F.lit(False)))
+reconciliation = calculated_comparable.join(
+    published, ["ano", "id_municipio", "sigla_uf", "serie", "rede"], "left"
+)
+reconciliation = reconciliation.withColumn(
+    "tem_registro_publicado",
+    F.coalesce(F.col("__registro_publicado_encontrado"), F.lit(False)),
+)
 reconciliation = reconciliation.withColumn(
     "status_correspondencia",
     F.when(~F.col("tem_registro_publicado"), "SEM_REGISTRO_PUBLICADO")
      .when(F.col("taxa_oficial_publicada").isNull(), "REGISTRO_SEM_TAXA_PUBLICADA")
      .otherwise("COMPARAVEL"),
 ).drop("__registro_publicado_encontrado")
-reconciliation = reconciliation.withColumn("diferenca_pontos_percentuais", F.col("taxa_calculada_microdados") - F.col("taxa_oficial_publicada"))
-evolution_base = municipio.groupBy("ano", "serie", "rede").agg(F.avg("taxa_alfabetizacao").alias("media_simples_municipal_percentual"), F.countDistinct("id_municipio").alias("municipios_com_resultado"))
+reconciliation = reconciliation.withColumn(
+    "diferenca_pontos_percentuais",
+    F.col("taxa_calculada_microdados") - F.col("taxa_oficial_publicada"),
+)
+
+# Year-over-year evolution uses paired municipalities only. This is a non-official
+# simple municipal mean, not a population-weighted national or state indicator.
+evolution_base = municipio.groupBy("ano", "serie", "rede").agg(
+    F.avg("taxa_alfabetizacao").alias("media_simples_municipal_percentual"),
+    F.countDistinct("id_municipio").alias("municipios_com_resultado"),
+)
 history_window = Window.partitionBy("id_municipio", "serie", "rede").orderBy("ano")
-history = municipio.select("ano", "id_municipio", "serie", "rede", "taxa_alfabetizacao") \
-    .withColumn("ano_anterior", F.lag("ano").over(history_window)) \
-    .withColumn("taxa_ano_anterior", F.lag("taxa_alfabetizacao").over(history_window)) \
-    .withColumn("variacao_municipal_pp", F.col("taxa_alfabetizacao") - F.col("taxa_ano_anterior")) \
+history = (
+    municipio.select("ano", "id_municipio", "serie", "rede", "taxa_alfabetizacao")
+    .withColumn("ano_anterior", F.lag("ano").over(history_window))
+    .withColumn("taxa_ano_anterior", F.lag("taxa_alfabetizacao").over(history_window))
+    .withColumn("variacao_municipal_pp", F.col("taxa_alfabetizacao") - F.col("taxa_ano_anterior"))
     .filter(
         F.col("ano_anterior").isNotNull()
         & ((F.col("ano") - F.col("ano_anterior")) == 1)
         & F.col("taxa_alfabetizacao").isNotNull()
         & F.col("taxa_ano_anterior").isNotNull()
     )
+)
 comparison = history.groupBy("ano", "serie", "rede").agg(
     F.countDistinct("id_municipio").alias("municipios_comparaveis_ano_anterior"),
     F.avg("variacao_municipal_pp").alias("media_variacao_municipal_pp"),
@@ -373,43 +700,45 @@ comparison = history.groupBy("ano", "serie", "rede").agg(
     F.countDistinct(F.when(F.col("variacao_municipal_pp") == 0, F.col("id_municipio"))).alias("municipios_estaveis"),
 )
 evolution = evolution_base.join(comparison, ["ano", "serie", "rede"], "left")
-for count_column in ["municipios_comparaveis_ano_anterior", "municipios_melhoraram", "municipios_pioraram", "municipios_estaveis"]:
-    evolution = evolution.withColumn(count_column, F.coalesce(F.col(count_column), F.lit(0)).cast("long"))
-evolution = evolution.withColumn("indicador_agregado", F.lit("media_simples_municipal_nao_oficial")).withColumn("indicador_variacao", F.lit("variacao_ano_a_ano_municipios_pareados_nao_oficial"))
-evolution = evolution.withColumn("origem_dado", F.lit("oficial_tabela_agregada_agregada_sem_ponderacao"))
+for count_column in [
+    "municipios_comparaveis_ano_anterior", "municipios_melhoraram",
+    "municipios_pioraram", "municipios_estaveis",
+]:
+    evolution = evolution.withColumn(
+        count_column, F.coalesce(F.col(count_column), F.lit(0)).cast("long")
+    )
+evolution = (
+    evolution
+    .withColumn("indicador_agregado", F.lit("media_simples_municipal_nao_oficial"))
+    .withColumn("indicador_variacao", F.lit("variacao_ano_a_ano_municipios_pareados_nao_oficial"))
+    .withColumn("origem_dado", F.lit("oficial_tabela_agregada_agregada_sem_ponderacao"))
+)
 
-# Long proficiency profile from the source's nine performance-level shares.
+# Long proficiency profile from the nine source shares. The published literacy
+# rate is retained as context and is never reconstructed from proficiency values.
 def build_profile(source, geography):
     levels = [level for level in range(9) if f"proporcao_aluno_nivel_{level}" in source.columns]
     if not levels:
         return None
     selected = []
-    for column, default in [
-        ("ano", None), ("sigla_uf", None), ("id_municipio", None),
-        ("serie", None), ("rede", None), ("media_portugues", None),
-        ("taxa_alfabetizacao", None),
-    ]:
-        if column in source.columns:
-            selected.append(F.col(column))
-        else:
-            selected.append(F.lit(default).cast("string").alias(column))
-    sum_expr = sum([F.coalesce(F.col(f"proporcao_aluno_nivel_{level}").cast("double"), F.lit(0.0)) for level in levels])
+    for column in ["ano", "sigla_uf", "id_municipio", "serie", "rede", "media_portugues", "taxa_alfabetizacao"]:
+        selected.append(F.col(column) if column in source.columns else F.lit(None).cast("string").alias(column))
+    total_expr = sum([
+        F.coalesce(F.col(f"proporcao_aluno_nivel_{level}").cast("double"), F.lit(0.0))
+        for level in levels
+    ])
     has_any_level = None
     for level in levels:
-        present = F.col(f"proporcao_aluno_nivel_{level}").isNotNull()
-        has_any_level = present if has_any_level is None else (has_any_level | present)
-    sum_expr = F.when(has_any_level, sum_expr).otherwise(F.lit(None).cast("double"))
-    array_expr = F.array(*[
+        has_value = F.col(f"proporcao_aluno_nivel_{level}").isNotNull()
+        has_any_level = has_value if has_any_level is None else (has_any_level | has_value)
+    total_expr = F.when(has_any_level, total_expr).otherwise(F.lit(None).cast("double"))
+    levels_array = F.array(*[
         F.struct(
             F.lit(level).alias("nivel_desempenho"),
             F.col(f"proporcao_aluno_nivel_{level}").cast("double").alias("proporcao_alunos_pct"),
         ) for level in levels
     ])
-    prepared = source.select(
-        *selected,
-        sum_expr.alias("soma_niveis_pct"),
-        F.explode(array_expr).alias("nivel"),
-    )
+    prepared = source.select(*selected, total_expr.alias("soma_niveis_pct"), F.explode(levels_array).alias("nivel"))
     return prepared.select(
         F.lit(geography).alias("nivel_geografico"),
         "ano", "sigla_uf", "id_municipio", "serie", "rede",
@@ -420,20 +749,25 @@ def build_profile(source, geography):
     ).filter(F.col("proporcao_alunos_pct").isNotNull())
 
 profiles = [build_profile(municipio, "MUNICIPIO"), build_profile(uf, "UF")]
-profiles = [frame for frame in profiles if frame is not None]
-profile_mart = profiles[0] if len(profiles) == 1 else profiles[0].unionByName(profiles[1]) if len(profiles) == 2 else None
+profiles = [profile for profile in profiles if profile is not None]
+if len(profiles) == 2:
+    profile_mart = profiles[0].unionByName(profiles[1])
+elif len(profiles) == 1:
+    profile_mart = profiles[0]
+else:
+    profile_mart = None
 
-# Aggregate explicit denominators for attainment and target coverage.
+# Status counts use explicit denominators. Non-comparable records are excluded
+# from attainment percentages and reported separately.
 def build_monitoring(source, geography, status_column, gap_column):
-    group_cols = ["sigla_uf", "ano", "serie", "rede"]
+    group_columns = ["sigla_uf", "ano", "serie", "rede"]
     attained = F.sum(F.when(F.col(status_column) == "ATINGIDA", 1).otherwise(0))
     below = F.sum(F.when(F.col(status_column) == "ABAIXO_DA_META", 1).otherwise(0))
     no_target = F.sum(F.when(F.col(status_column) == "SEM_META", 1).otherwise(0))
     no_result = F.sum(F.when(F.col(status_column) == "SEM_RESULTADO", 1).otherwise(0))
     non_comparable = F.sum(F.when(F.col(status_column) == "NAO_COMPARAVEL", 1).otherwise(0))
-    comparable = attained + below + no_target + no_result
     with_target = attained + below
-    aggregated = source.groupBy(*group_cols).agg(
+    aggregated = source.groupBy(*group_columns).agg(
         F.count(F.lit(1)).alias("total_registros"),
         F.sum(F.when(F.col("taxa_alfabetizacao").isNotNull(), 1).otherwise(0)).alias("registros_com_resultado"),
         attained.alias("atingida"), below.alias("abaixo_da_meta"),
@@ -454,168 +788,215 @@ monitoring_municipal = build_monitoring(fact, "MUNICIPIOS_POR_UF", "status_meta_
 monitoring_uf = build_monitoring(uf_mart, "UF_OFICIAL", "status_meta_uf", "gap_meta_uf_pp")
 monitoring_mart = monitoring_municipal.unionByName(monitoring_uf)
 
-# Curves are kept separate from observed outcomes; future target years are not mixed into fact.
+# Target curves are separate from observed outcomes; do not extrapolate missing years.
 def target_curve(source, geography):
     result = source.select(
         F.lit(geography).alias("nivel_geografico"),
         (F.col("sigla_uf") if "sigla_uf" in source.columns else F.lit(None).cast("string")).alias("sigla_uf"),
         (F.col("id_municipio") if "id_municipio" in source.columns else F.lit(None).cast("string")).alias("id_municipio"),
-        F.col("ano").alias("ano_meta"), "serie", "rede",
-        "meta_alfabetizacao",
+        F.col("ano").alias("ano_meta"), "serie", "rede", "meta_alfabetizacao",
         (F.col("meta_snapshot_ano") if "meta_snapshot_ano" in source.columns else F.lit(None).cast("int")).alias("meta_snapshot_ano"),
     )
     curve_window = Window.partitionBy("nivel_geografico", "sigla_uf", "id_municipio", "serie", "rede").orderBy("ano_meta")
-    return result.withColumn("meta_ano_anterior", F.lag("meta_alfabetizacao").over(curve_window)) \
-        .withColumn("ano_meta_anterior", F.lag("ano_meta").over(curve_window)) \
+    return (
+        result
+        .withColumn("meta_ano_anterior", F.lag("meta_alfabetizacao").over(curve_window))
+        .withColumn("ano_meta_anterior", F.lag("ano_meta").over(curve_window))
         .withColumn(
             "variacao_meta_pp_ano_anterior",
             F.when(F.col("ano_meta") - F.col("ano_meta_anterior") == 1, F.col("meta_alfabetizacao") - F.col("meta_ano_anterior")),
-        ).drop("meta_ano_anterior", "ano_meta_anterior").withColumn("origem_dado", F.lit("meta_oficial_snapshot"))
+        )
+        .drop("meta_ano_anterior", "ano_meta_anterior")
+        .withColumn("origem_dado", F.lit("meta_oficial_snapshot"))
+    )
 
-# The municipal target source may not carry sigla_uf. Enrich it from the
-# municipality dimension so the Glue mart has the same geographic key as local Gold.
 municipal_targets = frames["meta_alfabetizacao_municipio"]
-municipality_uf_dimension = municipio.select("id_municipio", "sigla_uf") \
-    .dropna(subset=["id_municipio", "sigla_uf"]) \
+municipality_uf_dimension = (
+    municipio.select("id_municipio", "sigla_uf")
+    .dropna(subset=["id_municipio", "sigla_uf"])
     .dropDuplicates(["id_municipio"])
+)
 if "sigla_uf" in municipal_targets.columns:
     municipality_uf_dimension = municipality_uf_dimension.withColumnRenamed("sigla_uf", "__sigla_uf_dimension")
-    municipal_targets = municipal_targets.join(municipality_uf_dimension, "id_municipio", "left") \
-        .withColumn("sigla_uf", F.coalesce(F.col("sigla_uf"), F.col("__sigla_uf_dimension"))) \
+    municipal_targets = (
+        municipal_targets.join(municipality_uf_dimension, "id_municipio", "left")
+        .withColumn("sigla_uf", F.coalesce(F.col("sigla_uf"), F.col("__sigla_uf_dimension")))
         .drop("__sigla_uf_dimension")
+    )
 else:
     municipal_targets = municipal_targets.join(municipality_uf_dimension, "id_municipio", "left")
 
-goal_trajectory = target_curve(frames["meta_alfabetizacao_brasil"], "BRASIL") \
-    .unionByName(target_curve(frames["meta_alfabetizacao_uf"], "UF")) \
+goal_trajectory = (
+    target_curve(frames["meta_alfabetizacao_brasil"], "BRASIL")
+    .unionByName(target_curve(frames["meta_alfabetizacao_uf"], "UF"))
     .unionByName(target_curve(municipal_targets, "MUNICIPIO"))
-
-# The stream path can be empty on the first deployment.
-# Invalid or incompatible events are quarantined, without blocking Batch.
-
+)
+# Operational streaming events have a contract distinct from official literacy indicators.
+# These events describe operational quantities; they must never be interpreted as official
+# literacy rates. Invalid events are quarantined and do not block the batch pipeline.
 stream = None
 
 bucket_name = source_prefix.split("/")[2]
-stream_prefix_key = stream_prefix.replace(
-    f"s3://{bucket_name}/", ""
-)
+stream_prefix_key = stream_prefix.replace(f"s3://{bucket_name}/", "")
 
-resp = s3.list_objects_v2(
-    Bucket=bucket_name,
-    Prefix=stream_prefix_key,
-    MaxKeys=1000,
-)
-
+# Paginate S3 listing so batches beyond the first 1,000 objects are not skipped.
+stream_paginator = s3.get_paginator("list_objects_v2")
+stream_objects = [
+    obj
+    for page in stream_paginator.paginate(Bucket=bucket_name, Prefix=stream_prefix_key)
+    for obj in page.get("Contents", [])
+]
 stream_uris = [
     f"s3://{bucket_name}/{obj['Key']}"
-    for obj in resp.get("Contents", [])
-    if obj["Key"].endswith((".json", ".jsonl"))
+    for obj in stream_objects
+    if obj["Key"].lower().endswith((".json", ".jsonl"))
 ]
 
 if stream_uris:
     raw_stream = spark.read.json(stream_uris)
 
-    if "event_id" in raw_stream.columns:
-        raw_stream = raw_stream.dropDuplicates(["event_id"])
+    def stream_value(candidates, data_type="string", default=None):
+        """Coalesce aliases available in the input schema and cast to a stable type."""
+        available = [
+            F.col(column).cast(data_type)
+            for column in candidates
+            if column in raw_stream.columns
+        ]
+        if not available:
+            return F.lit(default).cast(data_type)
+        return F.coalesce(*available)
 
-    required_stream_columns = [
-        "event_id",
-        "event_timestamp",
-        "ano",
-        "id_municipio",
-        "sigla_uf",
-        "serie",
-        "rede",
-        "taxa_alfabetizacao",
-    ]
+    # Preserve upstream quarantine errors; an event already marked invalid cannot be
+    # promoted to a valid event just because other fields happen to be present.
+    if "validation_error" in raw_stream.columns:
+        upstream_error = (
+            F.col("validation_error").isNotNull()
+            & (F.trim(F.col("validation_error").cast("string")) != "")
+        )
+        upstream_error_detail = F.col("validation_error").cast("string")
+    else:
+        upstream_error = F.lit(False)
+        upstream_error_detail = F.lit(None).cast("string")
 
-    missing_stream_columns = [
-        column
-        for column in required_stream_columns
-        if column not in raw_stream.columns
-    ]
+    normalized_stream = (
+        raw_stream
+        .withColumn("_event_id", stream_value(["event_id"]))
+        .withColumn("_event_timestamp", F.to_timestamp(stream_value(["event_timestamp"])))
+        .withColumn("_ano_input", stream_value(["ano"], "int"))
+        .withColumn("_sigla_uf", F.upper(F.trim(stream_value(["sigla_uf", "uf"]))))
+        .withColumn(
+            "_id_municipio_raw",
+            F.regexp_replace(
+                F.trim(stream_value(["id_municipio", "municipio_codigo"])),
+                r"\.0$",
+                "",
+            ),
+        )
+        .withColumn("_entidade", F.lower(F.trim(stream_value(["entidade"]))))
+        .withColumn("_quantidade", stream_value(["quantidade"], "double"))
+        .withColumn(
+            "_origem_dado",
+            F.coalesce(F.trim(stream_value(["origem_dado"])), F.lit("simulado")),
+        )
+        .withColumn("_ingested_at", stream_value(["ingested_at"]))
+        .withColumn("_latencia_segundos", stream_value(["latencia_segundos"], "double"))
+        .withColumn("_sqs_message_id", stream_value(["sqs_message_id"]))
+        .withColumn(
+            "_ano",
+            F.coalesce(F.col("_ano_input"), F.year(F.col("_event_timestamp"))),
+        )
+        .withColumn(
+            "_id_municipio",
+            F.when(
+                F.col("_id_municipio_raw").rlike(r"^[0-9]{1,7}$"),
+                F.lpad(F.col("_id_municipio_raw"), 7, "0"),
+            ),
+        )
+    )
 
+    quantity = F.col("_quantidade")
+    invalid_reasons = F.concat_ws(
+        ";",
+        F.when(upstream_error, F.concat(F.lit("upstream_validation_error:"), upstream_error_detail)),
+        F.when(
+            F.col("_event_id").isNull() | (F.trim(F.col("_event_id")) == ""),
+            F.lit("missing_event_id"),
+        ),
+        F.when(F.col("_event_timestamp").isNull(), F.lit("invalid_event_timestamp")),
+        F.when(F.col("_ano").isNull(), F.lit("missing_or_invalid_ano")),
+        F.when(
+            F.col("_sigla_uf").isNull() | ~F.col("_sigla_uf").rlike(r"^[A-Z]{2}$"),
+            F.lit("missing_or_invalid_uf"),
+        ),
+        F.when(F.col("_id_municipio").isNull(), F.lit("missing_or_invalid_municipality_code")),
+        F.when(
+            F.col("_entidade").isNull() | (F.col("_entidade") == ""),
+            F.lit("missing_entidade"),
+        ),
+        F.when(
+            quantity.isNull()
+            | F.isnan(quantity)
+            | (quantity < 0)
+            | (quantity == float("inf"))
+            | (quantity == float("-inf")),
+            F.lit("missing_or_invalid_quantidade"),
+        ),
+    )
+    invalid_condition = upstream_error | (invalid_reasons != "")
     quarantine_path = (
         f"s3://{lake_bucket}/observability/"
         f"quarantine/run_id={run_id}/streaming_invalid"
     )
 
-    # If the entire input schema lacks required columns,
-    # quarantine the records without referencing missing columns.
-    if missing_stream_columns:
-        invalid = raw_stream.withColumn(
-            "validation_error",
-            F.lit(
-                "missing_required_columns:"
-                + ",".join(missing_stream_columns)
-            ),
+    invalid = (
+        normalized_stream
+        .filter(invalid_condition)
+        .withColumn("validation_error", invalid_reasons)
+        .drop(
+            "_event_id", "_event_timestamp", "_ano_input", "_sigla_uf",
+            "_id_municipio_raw", "_entidade", "_quantidade", "_origem_dado",
+            "_ingested_at", "_latencia_segundos", "_sqs_message_id", "_ano",
+            "_id_municipio",
         )
+    )
+    invalid_count = invalid.count()
+    if invalid_count:
+        invalid.write.mode("append").json(quarantine_path)
 
-        if invalid.limit(1).count() > 0:
-            invalid.write.mode("append").json(quarantine_path)
-
-        print(
-            "STREAM_SCHEMA_INVALID: "
-            f"missing_columns={missing_stream_columns}. "
-            "Events quarantined; Batch processing will continue."
-        )
-
+    valid_stream = (
+        normalized_stream
+        .filter(~invalid_condition)
+        .dropDuplicates(["_event_id"])
+    )
+    stream = valid_stream.select(
+        F.col("_event_id").alias("event_id"),
+        F.col("_event_timestamp").alias("event_timestamp"),
+        F.col("_ano").cast("int").alias("ano"),
+        F.col("_sigla_uf").alias("sigla_uf"),
+        F.col("_id_municipio").alias("id_municipio"),
+        F.col("_entidade").alias("entidade"),
+        quantity.alias("quantidade"),
+        F.col("_origem_dado").alias("origem_dado"),
+        F.col("_ingested_at").alias("ingested_at"),
+        F.col("_latencia_segundos").alias("latencia_segundos"),
+        F.col("_sqs_message_id").alias("sqs_message_id"),
+        F.lit("SIMULADO_NAO_OFICIAL").alias("status_evento"),
+    )
+    valid_count = stream.count()
+    print(
+        "STREAMING_VALIDATION: "
+        f"input_files={len(stream_uris)}, valid_events={valid_count}, "
+        f"quarantined_events={invalid_count}"
+    )
+    if valid_count == 0:
         stream = None
-
-    else:
-        raw_stream = raw_stream.withColumn(
-            "taxa_alfabetizacao",
-            F.col("taxa_alfabetizacao").cast("double"),
-        )
-
-        invalid_condition = F.lit(False)
-
-        for event_col in required_stream_columns:
-            invalid_condition = (
-                invalid_condition
-                | F.col(event_col).isNull()
-                | (
-                    F.trim(F.col(event_col).cast("string")) == ""
-                )
-            )
-
-        invalid_condition = (
-            invalid_condition
-            | F.col("taxa_alfabetizacao").isNull()
-            | ~F.col("taxa_alfabetizacao").between(0, 100)
-        )
-
-        invalid = raw_stream.filter(invalid_condition).withColumn(
-            "validation_error",
-            F.lit("missing_or_invalid_required_field"),
-        )
-
-        if invalid.limit(1).count() > 0:
-            invalid.write.mode("append").json(quarantine_path)
-
-        valid_stream = raw_stream.filter(~invalid_condition)
-
-        # Publish streaming events only when valid records exist.
-        if valid_stream.limit(1).count() > 0:
-            stream = (
-                valid_stream
-                .withColumn(
-                    "origem_dado",
-                    F.coalesce(
-                        F.col("origem_dado"),
-                        F.lit("simulado"),
-                    ),
-                )
-                .withColumn(
-                    "status_evento",
-                    F.lit("SIMULADO_NAO_OFICIAL"),
-                )
-            )
-        else:
-            stream = None
+else:
+    print(f"STREAMING_EMPTY: no JSON/JSONL objects under {stream_prefix}")
 
 silver_outputs = dict(frames)
+
 silver_outputs["indicador_calculado_microdados"] = calculated
+
 gold_outputs = {
     "fato_alfabetizacao_municipio": fact,
     "mart_alfabetizacao_uf": uf_mart,
@@ -625,16 +1006,29 @@ gold_outputs = {
     "mart_acompanhamento_metas": monitoring_mart,
     "mart_trajetoria_metas": goal_trajectory,
 }
+
 if stream is not None:
+
     gold_outputs["mart_streaming_eventos"] = stream
+
 for name, frame in gold_outputs.items():
+
     if name != "mart_streaming_eventos" and frame.limit(1).count() == 0:
+
         fail(f"Gold table empty before publish: {name}")
+
 for name, frame in silver_outputs.items():
+
     frame.write.mode("errorifexists").option("compression", "snappy").parquet(f"{output_prefix}/{name}/run_id={run_id}")
 
+
+
 for name, frame in gold_outputs.items():
+
     frame.write.mode("errorifexists").option("compression", "snappy").parquet(f"{gold_prefix}/{name}/run_id={run_id}")
 
+
+
 write_run_metrics("SUCCESS")
+
 print({"run_id": run_id, "rows_source": {k: v.count() for k, v in frames.items()}, "join_rate_students_municipio": match_rate, "join_rate_municipio_uf": uf_rate, "gold_tables": list(gold_outputs.keys())})
