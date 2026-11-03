@@ -5,9 +5,9 @@
 [![Python](https://img.shields.io/badge/Python-3.11--3.13-blue)](https://www.python.org/)
 [![AWS](https://img.shields.io/badge/AWS-S3%20%7C%20Glue%20%7C%20Athena-orange)](https://aws.amazon.com/)
 [![Terraform](https://img.shields.io/badge/IaC-Terraform-844FBA)](https://www.terraform.io/)
-[![Tests](https://img.shields.io/badge/tests-9%20passed-brightgreen)](#testes)
+[![Tests](https://img.shields.io/badge/tests-12%20passed-brightgreen)](#testes)
 
-> **Status da entrega:** a execução integrada de 02/11/2026 concluiu Glue, Crawlers e Quality Gate Athena com sucesso. A contagem histórica de 12 tabelas refere-se à fotografia de 29/10/2026. Em 03/11/2026 foi identificado um problema de profundidade nos Crawlers: o catálogo exibia 40 tabelas, incluindo 24 registros criados a partir de diretórios `run_id=...`. O Terraform agora fixa o nível das tabelas em 2, preservando `run_id` como partição. A alteração de infraestrutura e a limpeza seletiva dos metadados antigos ainda precisam ser aplicadas/validadas na conta AWS; até lá, 40 é a contagem observada, não o estado corrigido.
+> **Status da entrega (03/11/2026):** a execução integrada de 02/11/2026 concluiu Glue, Crawlers e Quality Gate Athena com sucesso. Em 03/11/2026, a configuração `Grouping.TableLevelConfiguration = 2` foi aplicada aos Crawlers Silver e Gold, e ambos concluíram novos rastreamentos com status `SUCCEEDED`. Foram removidas seletivamente 24 definições redundantes `run_id_*` do Glue Data Catalog, preservando os arquivos no S3 e as 16 tabelas principais (8 Silver e 8 Gold). O Athena confirmou as 16 tabelas e o particionamento histórico da fato municipal: oito execuções com 23.995 registros cada, totalizando 191.960 linhas na tabela ao considerar todos os snapshots. A partição mais recentemente criada no catálogo foi `feb4e177-4ea5-4456-bb6d-2fd0832b1507`, com 23.995 registros. Esses 191.960 registros são linhas acumuladas entre snapshots, não municípios únicos. O total de 187.200 da seção 9.4 é uma métrica distinta do Quality Gate integrado, que soma oito tabelas Gold naquela execução.
 
 ## 1. Visão geral
 
@@ -191,7 +191,7 @@ A ausência de uma meta **não significa descumprimento**. A meta pactuada pela 
 
 As saídas AWS Silver/Gold são gravadas em Parquet com compressão Snappy e particionadas por execução (`run_id`). Ao consultar no Athena, filtre o `run_id` desejado para não combinar registros de execuções diferentes.
 
-Os Crawlers recebem como alvo as raízes `silver/` e `gold/`. O Terraform define `Grouping.TableLevelConfiguration = 2`: o primeiro nível abaixo do bucket identifica a camada e o segundo identifica a tabela; as pastas `run_id=...` do terceiro nível são partições. Essa configuração evita catalogar diretórios de execução como tabelas independentes. A contagem de 40 tabelas observada em 03/11/2026 é anterior à aplicação dessa correção; consulte [`docs/glue_catalog.md`](docs/glue_catalog.md) para aplicar e limpar com segurança os metadados redundantes.
+Os Crawlers recebem como alvo as raízes `silver/` e `gold/`. O Terraform define `Grouping.TableLevelConfiguration = 2`: o primeiro nível abaixo do bucket identifica a camada e o segundo identifica a tabela; as pastas `run_id=...` do terceiro nível são partições. Essa configuração evita catalogar diretórios de execução como tabelas independentes. A configuração foi aplicada aos dois Crawlers em 03/11/2026, e os rastreamentos Silver e Gold terminaram com `SUCCEEDED`. Após a limpeza seletiva dos metadados redundantes, o Glue Data Catalog ficou com 16 tabelas principais (8 Silver e 8 Gold), sem tabelas extras `run_id_*`. A operação removeu somente definições do catálogo; os objetos Parquet no S3 foram preservados. O procedimento e os critérios de identificação estão registrados em [`docs/glue_catalog.md`](docs/glue_catalog.md).
 
 ## 5. Qualidade de dados e observabilidade
 
@@ -305,7 +305,7 @@ Com o ambiente virtual ativado:
 python -m pytest -q
 ```
 
-**Resultado validado em clone limpo (Python 3.13.14):** `9 passed in 1.66s`. Os testes utilizam fixtures pequenas e não exigem os CSVs oficiais completos.
+**Resultado mais recente:** `12 passed` (duas `FutureWarning` foram observadas, sem falha nos testes). Os testes utilizam fixtures pequenas e não exigem os CSVs oficiais completos.
 
 Também foram executadas verificações de compilação Python e validação do Terraform:
 
@@ -459,7 +459,7 @@ GROUP BY run_id
 ORDER BY run_id;
 ```
 
-A consulta automática de qualidade valida oito tabelas Gold. Na execução de referência de 02/11/2026, o resultado foi `PASS`, com 187.200 registros somados e um evento simulado na tabela `mart_streaming_eventos`. Esse evento operacional não representa uma taxa oficial de alfabetização. Evite consultas extensas sem filtros e registre os bytes escaneados para FinOps.
+A consulta automática de qualidade valida oito tabelas Gold. Na execução integrada de referência de 02/11/2026, o resultado foi `PASS`, com 187.200 registros somados e um evento simulado na tabela `mart_streaming_eventos`. Esse total é a soma verificada pelo Quality Gate entre oito tabelas Gold naquela execução; não deve ser confundido com a contagem histórica de 191.960 linhas da tabela `fato_alfabetizacao_municipio` em oito partições `run_id`, validada em 03/11/2026. O evento operacional não representa uma taxa oficial de alfabetização. Evite consultas extensas sem filtros e registre os bytes escaneados para FinOps.
 
 ### 8.8. Limpeza dos recursos
 
@@ -594,6 +594,26 @@ As oito tabelas Gold verificadas foram `fato_alfabetizacao_municipio`, `mart_alf
 
 Na primeira tentativa integrada, o Glue concluiu com sucesso e a consulta Athena retornou `PASS`, mas a Step Functions falhou ao ler o resultado por um JSONPath incorreto (`$.gold_validation.QueryExecutionId`). O caminho foi corrigido para `$.gold_validation.QueryExecution.QueryExecutionId`. A execução descrita nesta seção é a repetição posterior, concluída com `SUCCEEDED`.
 
+## 9.5. Glue Data Catalog e snapshots históricos — validação de 03/11/2026
+
+Após a execução integrada descrita na seção 9.4, foi corrigida a profundidade de descoberta dos Crawlers para impedir que diretórios de execução fossem catalogados como tabelas. A configuração Terraform `Grouping.TableLevelConfiguration = 2` foi aplicada aos Crawlers Silver e Gold; os dois rastreamentos manuais de validação terminaram com `SUCCEEDED`.
+
+| Verificação | Resultado |
+|---|---:|
+| Tabelas principais no Glue Data Catalog | 16 (8 Silver e 8 Gold) |
+| Definições extras `run_id_*` removidas do catálogo | 24 |
+| Definições `run_id_*` restantes após a limpeza | 0 |
+| Tabelas retornadas por `SHOW TABLES` no Athena | 16 |
+| Partições `run_id` em `fato_alfabetizacao_municipio` | 8 |
+| Registros por partição da fato municipal | 23.995 |
+| `COUNT(*)` da fato municipal, somando as oito partições | 191.960 |
+
+A exclusão utilizou `aws glue delete-table` somente para as 24 definições que atendiam aos critérios documentados em [`docs/glue_catalog.md`](docs/glue_catalog.md): nome `run_id_*`, ausência de chaves de partição e localização diretamente em uma pasta `run_id=...` dentro dos prefixos Silver ou Gold. Nenhum objeto Parquet do S3 foi excluído nessa limpeza.
+
+A partição com maior `CreationTime` registrado pelo Glue foi `feb4e177-4ea5-4456-bb6d-2fd0832b1507`, criada em 02/11/2026 às 20:56:52 (UTC−03). Uma consulta Athena filtrada por esse `run_id` retornou 23.995 registros. As oito partições da fato municipal continham 23.995 registros cada; portanto, 191.960 é o volume de linhas acumuladas entre snapshots, não a quantidade de municípios únicos nem o volume de uma única execução.
+
+Os oito `run_id` encontrados foram `feb4e177-4ea5-4456-bb6d-2fd0832b1507`, `d5095134-779d-453d-b55a-c67a020ca4f3`, `117b9877-6796-4039-b56e-6ab35e6974f0`, `20261101T190118Z_4127a8f9`, `20261101T135015Z_198b7bef`, `20261031T150855Z_c4172cdb`, `20261029T231856Z_37704ef5` e `20261029T042713Z_e7985d98`.
+
 ## 10. Limitações conhecidas e interpretação dos resultados
 
 ### Completude dos microdados
@@ -708,6 +728,7 @@ Tech-Challenge-Pipeline-Fase-2/
 │   ├── evidencias_execucao.md        # Registro de evidências AWS/local
 │   ├── evidencias_execucao_local.md  # Evidências da execução local
 │   ├── finops.md                     # Medição e projeção de custos
+│   ├── glue_catalog.md               # Diagnóstico e validação do Glue Data Catalog
 │   └── runbook.md                    # Diagnóstico e recuperação
 ├── jobs/
 │   └── glue_medallion_job.py         # Job AWS Glue / PySpark
@@ -729,6 +750,7 @@ Tech-Challenge-Pipeline-Fase-2/
 - [Registro de evidências](docs/evidencias_execucao.md)
 - [Evidências da execução local](docs/evidencias_execucao_local.md)
 - [FinOps — custos e projeções](docs/finops.md)
+- [Glue Data Catalog — crawlers, partições e limpeza segura](docs/glue_catalog.md)
 - [Runbook — diagnóstico e recuperação](docs/runbook.md)
 - [Inventário dos dados de origem](data/exports_raw/LEIA-ME.md)
 
