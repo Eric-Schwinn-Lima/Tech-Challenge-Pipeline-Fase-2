@@ -7,7 +7,7 @@
 [![Terraform](https://img.shields.io/badge/IaC-Terraform-844FBA)](https://www.terraform.io/)
 [![Tests](https://img.shields.io/badge/tests-9%20passed-brightgreen)](#testes)
 
-> **Status da entrega:** pipeline executada localmente e implantada/validada na AWS. A execução AWS documentada processou as camadas Bronze, Silver e Gold, catalogou 12 tabelas e concluiu o job Glue com `SUCCESS` e o relatório de qualidade com `PASSED`. As limitações de cobertura das metas e de completude dos microdados permanecem explicitadas neste documento.
+> **Status da entrega:** a execução integrada de 02/11/2026 concluiu Glue, Crawlers e Quality Gate Athena com sucesso. A contagem histórica de 12 tabelas refere-se à fotografia de 29/10/2026. Em 03/11/2026 foi identificado um problema de profundidade nos Crawlers: o catálogo exibia 40 tabelas, incluindo 24 registros criados a partir de diretórios `run_id=...`. O Terraform agora fixa o nível das tabelas em 2, preservando `run_id` como partição. A alteração de infraestrutura e a limpeza seletiva dos metadados antigos ainda precisam ser aplicadas/validadas na conta AWS; até lá, 40 é a contagem observada, não o estado corrigido.
 
 ## 1. Visão geral
 
@@ -175,7 +175,7 @@ Na execução AWS registrada, o Glue Catalog apresentou as seguintes tabelas Sil
 | `mart_alfabetizacao_uf` | Resultado por UF e comparação com metas estadual/nacional. |
 | `mart_evolucao_temporal` | Evolução anual. A média simples municipal é descritiva, não oficial e não ponderada. |
 | `reconciliacao_microdados` | Comparação exploratória entre taxa ponderada calculada dos microdados e taxa agregada publicada. |
-| `mart_streaming_eventos` | Tabela prevista no desenho analítico para eventos simulados válidos; **não foi produzida na execução AWS documentada**, pois os eventos de teste não continham todos os campos analíticos exigidos. |
+| `mart_streaming_eventos` | Tabela de eventos simulados válidos. Não foi produzida na execução histórica de 29/10; a validação integrada de 02/11 encontrou uma linha sintética para o `run_id` testado. Não representa indicador oficial. |
 
 Os status de comparação com metas devem ser interpretados com cuidado:
 
@@ -187,9 +187,11 @@ Os status de comparação com metas devem ser interpretados com cuidado:
 
 A ausência de uma meta **não significa descumprimento**. A meta pactuada pela fonte e a aspiração de universalização da alfabetização são conceitos diferentes e não devem ser misturados.
 
-### Particionamento e formatos
+### Particionamento, formatos e Glue Data Catalog
 
 As saídas AWS Silver/Gold são gravadas em Parquet com compressão Snappy e particionadas por execução (`run_id`). Ao consultar no Athena, filtre o `run_id` desejado para não combinar registros de execuções diferentes.
+
+Os Crawlers recebem como alvo as raízes `silver/` e `gold/`. O Terraform define `Grouping.TableLevelConfiguration = 2`: o primeiro nível abaixo do bucket identifica a camada e o segundo identifica a tabela; as pastas `run_id=...` do terceiro nível são partições. Essa configuração evita catalogar diretórios de execução como tabelas independentes. A contagem de 40 tabelas observada em 03/11/2026 é anterior à aplicação dessa correção; consulte [`docs/glue_catalog.md`](docs/glue_catalog.md) para aplicar e limpar com segurança os metadados redundantes.
 
 ## 5. Qualidade de dados e observabilidade
 
