@@ -399,6 +399,14 @@ resource "aws_glue_crawler" "silver" {
   s3_target {
     path = "s3://${aws_s3_bucket.lake.bucket}/silver/"
   }
+  configuration = jsonencode({
+    Version = 1.0
+    Grouping = {
+      # O bucket e o nível 1 (silver/ ou gold/); cada diretório de tabela é nível 2.
+      # run_id=... permanece como partição no nível 3.
+      TableLevelConfiguration = 2
+    }
+  })
   schema_change_policy {
     delete_behavior = "LOG"
     update_behavior = "UPDATE_IN_DATABASE"
@@ -413,6 +421,14 @@ resource "aws_glue_crawler" "gold" {
   s3_target {
     path = "s3://${aws_s3_bucket.lake.bucket}/gold/"
   }
+  configuration = jsonencode({
+    Version = 1.0
+    Grouping = {
+      # O bucket e o nível 1 (silver/ ou gold/); cada diretório de tabela é nível 2.
+      # run_id=... permanece como partição no nível 3.
+      TableLevelConfiguration = 2
+    }
+  })
   schema_change_policy {
     delete_behavior = "LOG"
     update_behavior = "UPDATE_IN_DATABASE"
