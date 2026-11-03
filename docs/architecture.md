@@ -34,7 +34,7 @@ flowchart TD
     CW --> SNS[Amazon SNS]
 ```
 
-**Importante:** no estado atual validado na AWS, os eventos de teste não continham todas as colunas necessárias ao modelo analítico de streaming. Por isso, foram preservados na Bronze e encaminhados para quarentena pelo processamento Glue. A tabela `mart_streaming_eventos` **não foi produzida nessa execução AWS**. O fluxo local possui evidência separada de processamento de eventos simulados.
+**Importante:** a execução histórica AWS de 29/10 não produziu `mart_streaming_eventos`, pois os eventos de teste não continham todas as colunas analíticas necessárias. Na validação integrada de 02/11 foi encontrada uma linha sintética nessa tabela para o `run_id` testado. Eventos continuam sendo demonstrações técnicas, não indicadores oficiais.
 
 ## 3. Fluxo batch
 
@@ -43,8 +43,9 @@ flowchart TD
 3. A preparação gera as sete fontes canônicas em `data/source/`, normaliza os nomes, converte as metas do formato largo para formato longo, preserva o ano do snapshot e deriva `sigla_uf` do prefixo do código IBGE quando a fonte não fornece a UF.
 4. Enviar os arquivos canônicos para `s3://<bucket>/bronze/source/`.
 5. O Glue lê as seis entidades analíticas e a tabela auxiliar `dicionario`, valida as fontes e os joins, e publica Silver/Gold com `run_id`.
-6. Os crawlers catalogam Silver e Gold. Na implantação validada, eles foram iniciados após a execução da Step Functions.
-7. Athena consulta as tabelas catalogadas. Para Gold, filtrar `run_id` para não misturar várias execuções.
+6. A Step Functions inicia e aguarda os Crawlers Silver e Gold após o Glue Job, aplica o reparo de partições previsto e executa o Quality Gate no Athena.
+7. Os Crawlers usam `Grouping.TableLevelConfiguration = 2`: cada diretório de tabela em `silver/<tabela>/` e `gold/<tabela>/` é catalogado uma vez; `run_id=...` é reconhecido como partição.
+8. Athena consulta as tabelas catalogadas. Para Gold, filtrar `run_id` para não misturar várias execuções.
 
 ### Camadas
 
@@ -54,6 +55,12 @@ flowchart TD
 | Silver | Dados limpos, normalizados, descrições derivadas do dicionário e indicadores intermediários | Parquet Snappy no Glue |
 | Gold | Fato municipal, mart por UF, evolução temporal e reconciliação de microdados | Parquet Snappy, particionado por `run_id` |
 | Quarentena/observabilidade | Registrar registros ou lotes que não atendem ao esquema/regras | JSON/Parquet conforme o estágio |
+
+### Glue Data Catalog e particionamento dos Crawlers
+
+A estrutura física segue `s3://<bucket>/<camada>/<tabela>/run_id=<id>/`. Como o caminho do crawler começa em `silver/` ou `gold/`, o nível absoluto da tabela a partir do bucket é 2. O Terraform define `Grouping.TableLevelConfiguration = 2` nos dois Crawlers. Não alterar para 3: isso faria cada diretório `run_id` parecer a raiz de uma tabela. A política `DeleteBehavior = LOG` é mantida deliberadamente para não permitir que um crawl remova automaticamente metadados do catálogo.
+
+A execução de diagnóstico de 03/11 encontrou 40 entradas no catálogo: 16 tabelas de negócio esperadas (8 Silver e 8 Gold) e 24 tabelas adicionais com nomes `run_id_*`, cujos locais apontam para diretórios de partição. Essas entradas antigas precisam de limpeza seletiva no Data Catalog depois que a configuração corrigida for aplicada e os Crawlers forem executados novamente. A limpeza não deve excluir objetos do S3. Consulte [`glue_catalog.md`](glue_catalog.md).
 
 ## 4. Fluxo de eventos
 
@@ -74,7 +81,7 @@ flowchart TD
 | AWS Glue 4.0 | Job Spark, dois workers G.1X, timeout de 30 minutos |
 | Glue Crawlers | Catalogação das camadas Silver e Gold |
 | Glue Data Catalog | Database e tabelas analíticas |
-| AWS Step Functions | Orquestração da execução síncrona do Glue Job; não inicia os crawlers |
+| AWS Step Functions | Orquestra Glue Job, Crawlers Silver/Gold, reparos de partição e Quality Gate Athena |
 | Amazon Athena | Consultas SQL sobre Gold |
 | Amazon CloudWatch | Logs, métricas e alarme de erros da Lambda |
 | Amazon SNS | Destino das notificações de alerta |
