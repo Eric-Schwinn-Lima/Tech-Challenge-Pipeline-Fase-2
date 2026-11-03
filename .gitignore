@@ -41,3 +41,7 @@ dist/
 # Arquivos temporários
 *.tmp
 *.bak
+
+# Backups e arquivos renderizados locais
+*.bak*
+cloud/terraform/rendered-state-machine.json

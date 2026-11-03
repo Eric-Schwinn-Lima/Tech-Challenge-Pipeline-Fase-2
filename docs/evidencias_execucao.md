@@ -1,40 +1,8 @@
 # Registro consolidado de evidências de execução
 
-Este documento separa a execução local da execução na AWS. Os resultados não devem ser somados ou tratados como uma mesma execução.
+Este documento separa a execução local das execuções realizadas na AWS. Os resultados de períodos e ambientes diferentes não devem ser somados nem tratados como uma mesma execução. A fotografia histórica de 29/10/2026 permanece separada das execuções orquestradas em 02/11/2026.
 
-## 1. Execução AWS integrada — 02/11/2026
-
-| Campo | Resultado |
-|---|---|
-| Data | 02/11/2026 |
-| Região | `us-east-2` |
-| Step Functions execution name | `validacao-final-20261102-170353` |
-| Estado da Step Functions | `SUCCEEDED` |
-| Início / término | 17:03:53.726 / 17:15:03.980 (UTC−03) |
-| Duração total | Aproximadamente 11 min 10 s |
-| `run_id` | `d5095134-779d-453d-b55a-c67a020ca4f3` |
-| Glue Job Run ID | `jr_72e1d75c775ccf77fc2675b98ffc00f12b5c3652f41068de5119dbe88e444fd7` |
-| Estado do Glue | `SUCCEEDED` |
-| Duração do Glue | 371 s |
-| `DPUSeconds` do Glue | 742 |
-| Crawler Silver / Gold | `SUCCEEDED` / `SUCCEEDED` |
-| Reparo Athena — fato municipal | `SUCCEEDED`; Query ID `400eb989-9ddf-4844-9e3c-a73272249ac1` |
-| Reparo Athena — mart UF | `SUCCEEDED`; Query ID `cf993e91-5c07-4eaa-90d6-da0ab3eada84` |
-| Validação Athena | `SUCCEEDED`; Query ID `94a4e66c-83d8-459a-baef-41777bfd36ce` |
-| Quality Gate | `PASS` |
-| Tabelas Gold verificadas | 8 |
-| Total de registros reportado | 187.200 |
-| Registros de streaming simulados | 1 |
-
-A máquina de estados executou o Glue de forma síncrona, iniciou e aguardou os crawlers Silver e Gold, executou os dois reparos de partição no Athena, consultou a validação Gold e avaliou o Quality Gate. O estado final `SUCCEEDED` confirma a conclusão de todas essas etapas na execução identificada acima.
-
-As oito tabelas Gold verificadas foram `fato_alfabetizacao_municipio`, `mart_alfabetizacao_uf`, `mart_evolucao_temporal`, `reconciliacao_microdados`, `mart_perfil_proficiencia`, `mart_acompanhamento_metas`, `mart_trajetoria_metas` e `mart_streaming_eventos`. O total de 187.200 é o total consolidado da consulta de qualidade; não foi capturada nesta execução uma distribuição individual por tabela. O único registro de streaming foi simulado e não constitui indicador oficial de alfabetização.
-
-### Tentativa integrada anterior e correção
-
-A tentativa anterior usou o `run_id` `117b9877-6796-4039-b56e-6ab35e6974f0`. O Glue terminou `SUCCEEDED` em 321 s, com 642 DPU-segundos, e a validação Athena retornou `PASS` para oito tabelas e 187.200 registros. A Step Functions, porém, terminou `FAILED` na etapa `GetGoldValidationResults`, porque o JSONPath tentava ler `$.gold_validation.QueryExecutionId`. O caminho correto é `$.gold_validation.QueryExecution.QueryExecutionId`. Após a correção, a execução registrada na seção 1 terminou `SUCCEEDED`.
-
-## 2. Execução AWS histórica — 29/10/2026
+## 1. Execução AWS — fotografia histórica de 29/10/2026
 
 | Campo | Resultado |
 |---|---|
@@ -68,7 +36,7 @@ As seis entidades obrigatórias totalizam 1.110.375 linhas; com o dicionário au
 | `mart_alfabetizacao_uf` | 145 |
 | `mart_evolucao_temporal` | 7 |
 | `reconciliacao_microdados` | 12.393 |
-| `mart_streaming_eventos` | **Não produzida** |
+| `mart_streaming_eventos` | Não produzida nesta execução |
 
 ### Qualidade e catálogo
 
@@ -84,18 +52,18 @@ As seis entidades obrigatórias totalizam 1.110.375 linhas; com o dicionário au
 
 O total dos quatro estados é 23.995. `SEM_META` e `NAO_COMPARAVEL` são condições distintas e não significam necessariamente falha no processamento.
 
-### Step Functions
+### Step Functions — histórico de 29/10
 
-A execução `validacao-pipeline-20261029201808` terminou `SUCCEEDED` em 29/10/2026. A máquina orquestra o Glue Job de forma síncrona e não inicia os crawlers; os crawlers foram executados separadamente depois da execução.
+A execução `validacao-pipeline-20261029201808` terminou `SUCCEEDED` em 29/10/2026. Naquele fluxo histórico, a máquina orquestrava o Glue Job de forma síncrona; os crawlers eram executados separadamente depois da execução. A arquitetura foi ampliada posteriormente: as execuções de 02/11 descritas na seção 2 passaram a incluir crawlers e consultas de validação na orquestração.
 
-### Streaming AWS
+### Streaming AWS — histórico de 29/10
 
 - A fila SQS acionou a Lambda e os objetos foram gravados em `bronze/streaming/`.
 - Foram testadas duas mensagens: uma carga malformada e uma mensagem JSON válida. A mensagem válida registrou latência observada de aproximadamente **2,180166 s**.
 - A mensagem de demonstração não possuía o esquema analítico completo esperado pelo Glue (por exemplo, ano, série, rede e taxa). O Glue preservou/encaminhou o conteúdo para quarentena em vez de gerar uma tabela analítica.
-- Portanto, não há evidência de uma `mart_streaming_eventos` AWS nessa execução. Não apresente o evento operacional como indicador oficial de alfabetização.
+- Portanto, não há evidência de `mart_streaming_eventos` nesta execução AWS de 29/10. Não apresente o evento operacional como indicador oficial de alfabetização.
 
-### Monitoramento e FinOps
+### Monitoramento e FinOps — fotografia de outubro
 
 - Alarme CloudWatch da Lambda em estado `OK`, com ação SNS habilitada; limiar `Errors >= 1` em janela de cinco minutos.
 - Assinatura de e-mail SNS confirmada.
@@ -103,25 +71,124 @@ A execução `validacao-pipeline-20261029201808` terminou `SUCCEEDED` em 29/10/2
 - AWS Budget diário de **US$ 10**, notificação de custo real em **85% (US$ 8,50)**.
 - Cost Explorer consultado para 01–29/10/2026 (consulta com fim exclusivo em 30/10). Os valores observados estavam próximos de zero: S3 aproximadamente US$ 0,0000000007 e Data Transfer aproximadamente -US$ 0,0000000015; os demais serviços consultados apresentaram valores 0,00 no relatório naquele momento. Isso não prova custo final zero: Cost Explorer/Billing pode ter atraso e ajustes.
 
-## 3. Execução local
+## 2. Execuções AWS — orquestração e validação de 02/11/2026
+
+As execuções abaixo ocorreram depois da ampliação da máquina de estados. Os horários são locais de Brasília (`-03:00`). São execuções AWS distintas da fotografia histórica de 29/10.
+
+### 2.1 Tentativa com falha na orquestração — 16:47
+
+| Campo | Resultado |
+|---|---|
+| Step Functions execution | `validacao-medallion-20261102-164701` |
+| Início | 02/11/2026 16:47:02 |
+| Fim | 02/11/2026 16:57:20 |
+| Estado da Step Function | `FAILED` |
+| Glue Job Run ID | `jr_c1c9b53c0bdba3f3807ecfa75304ed3d1d6fff5020bf02b5cd359f59f67ac919` |
+| Estado do Glue | `SUCCEEDED` |
+| Duração do Glue | 321 s |
+| DPU-segundos do Glue | 642 |
+
+O processamento Glue terminou com sucesso, mas a execução da Step Function falhou em uma etapa posterior de recuperação do resultado por JSONPath, após a consulta Athena ter sido concluída. Portanto, não classificar essa tentativa como uma execução de orquestração ponta a ponta bem-sucedida.
+
+### 2.2 Execução de validação concluída — 17:03
+
+| Campo | Resultado |
+|---|---|
+| Step Functions execution | `validacao-final-20261102-170352` |
+| Início | 02/11/2026 17:03:53 |
+| Fim | 02/11/2026 17:15:03 |
+| Estado da Step Function | `SUCCEEDED` |
+| `run_id` do pipeline | `d5095134-779d-453d-b55a-c67a020ca4f3` |
+| Glue Job Run ID | `jr_72e1d75c775ccf77fc2675b98ffc00f12b5c3652f41068de5119dbe88e444fd7` |
+| Estado do Glue | `SUCCEEDED` |
+| Duração do Glue | 371 s |
+| DPU-segundos do Glue | 742 |
+
+A execução consultou oito tabelas no Athena e retornou:
+
+| Indicador | Resultado |
+|---|---:|
+| Quality status | `PASS` |
+| Tabelas verificadas | 8 |
+| Total de linhas retornadas pela validação | 187.200 |
+| Linhas em `mart_streaming_eventos` para o `run_id` | 1 |
+
+A validação exigiu linhas positivas nas sete tabelas diferentes de `mart_streaming_eventos`. O registro de streaming encontrado é evidência técnica de um evento processado, não um indicador oficial de alfabetização.
+
+### 2.3 Execução de validação do CloudWatch Logs — 20:49
+
+| Campo | Resultado |
+|---|---|
+| Step Functions execution | `validacao-cloudwatch-20261102-204946` |
+| Início | 02/11/2026 20:49:47 |
+| Fim | 02/11/2026 21:00:06 |
+| Estado da Step Function | `SUCCEEDED` |
+| Glue Job Run ID identificado no log stream | `jr_16518f4f47e0e9ae0b60e1a199f8a5fe362d3671325c8fa60e8c3d9abf689cd8` |
+
+Essa execução foi realizada depois da atualização do job Glue para direcionar os logs contínuos ao grupo exclusivo do projeto. O CloudWatch retornou um fluxo de logs para o grupo:
+
+`/aws-glue/jobs/logs-v2/tc-alfabetizacao-a9455abd`
+
+O `get-log-events` retornou mensagens reais da execução, incluindo:
+
+- Inicialização do componente `GlueCloudwatchSink`.
+- Obtenção de credenciais por meio do Instance Profile.
+- Identificação do job `tc-alfabetizacao-a9455abd-medallion-pipeline` e do respectivo `jobRunId`.
+- Mensagens de inicialização e conexão dos executores Spark.
+
+O campo `storedBytes` retornado na consulta de metadados do fluxo apareceu como zero, embora `get-log-events` tenha retornado mensagens. Por isso, esse campo não foi usado como medição do volume de logs; a evidência de entrega é a recuperação das mensagens pelo `get-log-events`.
+
+## 3. Retenção e gerenciamento de CloudWatch Logs — 02/11/2026
+
+A retenção dos grupos de logs dedicados ao projeto passou a ser gerenciada pelo Terraform.
+
+| Grupo de logs | Finalidade | Retenção |
+|---|---|---:|
+| `/aws/lambda/tc-alfabetizacao-a9455abd-stream-consumer` | Logs da função Lambda | 30 dias |
+| `/aws-glue/jobs/logs-v2/tc-alfabetizacao-a9455abd` | Logs contínuos do job Glue do projeto | 30 dias |
+
+Configuração do Glue:
+
+- `--enable-continuous-cloudwatch-log = true`
+- `--continuous-log-logGroup = /aws-glue/jobs/logs-v2/tc-alfabetizacao-a9455abd`
+
+O plano Terraform revisado registrou `1 to add, 2 to change, 0 to destroy`. A aplicação terminou com `1 added, 2 changed, 0 destroyed`:
+
+- O grupo Lambda existente foi importado para o Terraform e atualizado *in-place*; não foi recriado.
+- O grupo dedicado aos logs contínuos do Glue foi criado.
+- O job Glue foi atualizado *in-place* para utilizar o grupo dedicado.
+- `skip_destroy = true` foi definido nos dois recursos de grupo de logs.
+
+Os grupos padrão compartilhados do Glue — como `/aws-glue/jobs/error`, `/aws-glue/jobs/output`, `/aws-glue/jobs/logs-v2` sem o sufixo do projeto e `/aws-glue/crawlers` — não foram alterados por essa mudança.
+
+**Limite importante:** `skip_destroy = true` protege o grupo contra exclusão pelo Terraform quando o recurso é removido da configuração; não impede a expiração automática de eventos pela política de retenção de 30 dias. A configuração do grupo dedicado aplica-se aos logs contínuos direcionados pelo argumento do job, não representa uma migração dos logs históricos dos grupos compartilhados.
+
+## 4. Execução local
 
 A execução local documentada é `20261029T003707Z_763b68ad`, `SUCCESS`, duração 30,811 s. Foram avaliadas 61 regras de qualidade, sem falhas bloqueantes. Houve cinco saídas Gold locais, incluindo duas linhas em `mart_streaming_eventos` produzidas a partir de eventos simulados. Consulte [`evidencias_execucao_local.md`](evidencias_execucao_local.md) para os detalhes. Esses resultados não são saídas AWS.
 
-## 4. Limitações transversais
+## 5. Limitações transversais
 
 1. `alunos.csv` tem 1.048.575 linhas; é um indício forte de possível truncamento, não prova. A reconciliação por microdados é exploratória até confirmação da completude na fonte.
 2. A tabela de metas cobre anos-alvo 2024–2030; não foi encontrada meta municipal 2023.
 3. Em 2024, na série 2/rede municipal, 96 municípios não possuíam linha na fonte de metas; 120 possuíam linha, mas valor vazio também no arquivo bruto.
-4. `PASSED` significa aprovação das regras automatizadas implementadas, não completude de todos os registros das fontes.
-5. A tabela AWS de streaming não foi produzida com o esquema dos eventos de teste utilizado.
+4. `PASSED`/`PASS` significa aprovação das regras automatizadas implementadas, não completude de todos os registros das fontes.
+5. A ausência de `mart_streaming_eventos` na execução AWS de 29/10 não deve ser generalizada para todas as execuções: na validação AWS de 02/11 às 17:03 foi retornada uma linha para o `run_id` daquela execução.
+6. A validação do grupo CloudWatch confirma que mensagens foram recuperadas de um fluxo dedicado de logs contínuos do Glue; não constitui, por si só, uma medição de custo nem de volume faturável.
 
-## 5. Evidências que ainda devem ser capturadas para a apresentação
+## 6. Evidências que devem ser mantidas para a apresentação
 
 - Prints do Console Glue com Job Run ID, configuração e estado.
-- Capturas dos crawlers e das 8 tabelas Gold verificadas na execução integrada; registre separadamente as tabelas Silver exibidas no Data Catalog.
+- Prints dos crawlers e das tabelas no Data Catalog.
 - Print do Athena com consulta filtrada por `run_id` e bytes escaneados.
 - Print do CloudWatch Alarm e das métricas customizadas.
 - Print do AWS Budget e da notificação configurada, sem expor endereço de e-mail.
+- Evidência do CloudWatch Logs com o grupo dedicado, retenção de 30 dias, fluxo e mensagens de `GlueCloudwatchSink`.
+- Print da execução `validacao-cloudwatch-20261102-204946` com status `SUCCEEDED`.
 - Vídeo executivo de até cinco minutos, caso ainda não tenha sido gravado.
 
 Não inclua Access Keys, tokens, e-mail privado, IDs de conta ou dados pessoais nas capturas. Os arquivos JSON desta pasta são resumos estruturados; não substituem exportações brutas de API/CloudWatch.
+
+---
+
+**Controle de versão:** documento atualizado em 03/11/2026 com evidências locais e AWS fornecidas até 02/11/2026. A fotografia de custos de 01–29/10/2026 permanece histórica; as novas execuções de 02/11 e a validação do CloudWatch estão identificadas separadamente.

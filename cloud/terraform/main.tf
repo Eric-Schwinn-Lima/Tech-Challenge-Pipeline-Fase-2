@@ -18,6 +18,20 @@ locals {
   bucket = "${local.name}-lake"
 }
 
+# CloudWatch Logs - Lambda Stream Consumer
+resource "aws_cloudwatch_log_group" "lambda_stream_consumer" {
+  name              = "/aws/lambda/${local.name}-stream-consumer"
+  retention_in_days = 30
+  skip_destroy      = true
+}
+
+# CloudWatch Logs - Glue Continuous Logging
+resource "aws_cloudwatch_log_group" "glue_continuous" {
+  name              = "/aws-glue/jobs/logs-v2/${local.name}"
+  retention_in_days = 30
+  skip_destroy      = true
+}
+
 resource "aws_s3_bucket" "lake" {
   bucket        = local.bucket
   force_destroy = false
@@ -212,6 +226,7 @@ resource "aws_glue_job" "pipeline" {
     "--MAX_INVALID_WEIGHT_RATE"          = tostring(var.max_invalid_weight_rate)
     "--enable-metrics"                   = "true"
     "--enable-continuous-cloudwatch-log" = "true"
+    "--continuous-log-logGroup"          = aws_cloudwatch_log_group.glue_continuous.name
     "--enable-spark-ui"                  = "true"
     "--TempDir"                          = "s3://${aws_s3_bucket.lake.bucket}/tmp/glue/"
   }

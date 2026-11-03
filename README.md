@@ -620,12 +620,34 @@ A média simples municipal usada em `mart_evolucao_temporal` é uma métrica des
 
 ### Monitoramento
 
-- Alarme CloudWatch para erros da função Lambda consumidora de SQS, com limiar configurado de 1 erro.
-- Ações do alarme habilitadas para o tópico SNS.
-- Assinatura de e-mail configurada no SNS.
-- Métricas customizadas: `EventsIngested`, `InvalidEvents` e `EventLatencySeconds`, no namespace `AlfabetizacaoPipeline`.
-- O estado observado do alarme Lambda estava `OK` na última verificação registrada.
+### Retenção e validação dos logs no CloudWatch
 
+A retenção dos logs da aplicação foi configurada e gerenciada pelo Terraform, com prazo de 30 dias.
+
+| Grupo de logs | Finalidade | Retenção |
+|---|---|---:|
+| `/aws/lambda/tc-alfabetizacao-a9455abd-stream-consumer` | Logs da Lambda Stream Consumer | 30 dias |
+| `/aws-glue/jobs/logs-v2/tc-alfabetizacao-a9455abd` | Logs contínuos do Glue ETL | 30 dias |
+
+Os dois recursos utilizam `skip_destroy = true`, evitando que o Terraform exclua os grupos de logs durante uma operação de destruição dos recursos gerenciados. Essa configuração não impede a expiração automática dos eventos após o prazo de retenção.
+
+No AWS Glue, foram habilitados os seguintes argumentos:
+
+- `--enable-continuous-cloudwatch-log = true`
+- `--continuous-log-logGroup = /aws-glue/jobs/logs-v2/tc-alfabetizacao-a9455abd`
+
+**Validação realizada em 02/11/2026:**
+
+- Step Functions: execução `validacao-cloudwatch-20261102-204946`.
+- Resultado: `SUCCEEDED`.
+- Grupo de logs: `/aws-glue/jobs/logs-v2/tc-alfabetizacao-a9455abd`.
+- Fluxo criado: `jr_16518f4f47e0e9ae0b60e1a199f8a5fe362d3671325c8fa60e8c3d9abf689cd8-1`.
+- Consulta `get-log-events` retornou mensagens reais do `GlueCloudwatchSink`.
+- Foi confirmada a obtenção de credenciais pelo Instance Profile e a identificação do Glue Job e de seu Job Run ID.
+
+A validação demonstrou o funcionamento do envio de logs contínuos para o grupo exclusivo do projeto.
+
+Os grupos compartilhados `/aws-glue/jobs/error`, `/aws-glue/jobs/output`, `/aws-glue/jobs/logs-v2` e `/aws-glue/crawlers` não foram modificados por essa implementação.
 ### Orçamento
 
 O orçamento de referência do projeto é o `Daily Budget`:

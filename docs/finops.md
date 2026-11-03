@@ -1,30 +1,43 @@
 # FinOps — Tech Challenge Pipeline de Alfabetização
 
-**Projeto:** AWS Tech Challenge — Pipeline de Alfabetização  
-**Região de execução:** `us-east-2` (Ohio)  
-**Período da fotografia de custos:** 1º a 29 de outubro de 2026  
-**Data de consolidação:** 30 de outubro de 2026  
+**Projeto:** AWS Tech Challenge — Pipeline de Alfabetização  
+
+**Região de execução:** `us-east-2` (Ohio)  
+
+**Período da fotografia de custos:** 1º a 29 de outubro de 2026  
+
+**Data de consolidação:** 3 de novembro de 2026
+
+**Atualização operacional:** evidências AWS até 2 de novembro de 2026  
+
 **Repositório:** `Tech-Challenge-Pipeline-Fase-2`
 
-> **Resumo executivo.** A arquitetura foi medida com baixo volume de processamento e armazenamento. O principal achado operacional foi o polling ocioso da fila SQS: em 29/10/2026, foram registrados 20.779 recebimentos vazios para apenas duas mensagens enviadas, recebidas e excluídas. Como o streaming será utilizado somente em testes e demonstrações, o Event Source Mapping foi desabilitado e o Terraform foi ajustado para mantê-lo desabilitado por padrão. Os valores do Cost Explorer apresentados nesta documentação estavam marcados como estimados e retornaram custo não alocado de US$ 0,00; isso não deve ser interpretado como garantia de custo zero ou como fatura final.
+> **Resumo executivo.** A arquitetura foi medida com baixo volume de processamento e armazenamento. O principal achado operacional foi o polling ocioso da fila SQS: em 29/10/2026, foram registrados 20.779 recebimentos vazios para apenas duas mensagens enviadas, recebidas e excluídas. Como o streaming será utilizado somente em testes e demonstrações, o Event Source Mapping foi desabilitado e o Terraform foi ajustado para mantê-lo desabilitado por padrão. Os valores do Cost Explorer apresentados nesta documentação estavam marcados como estimados e retornaram custo não alocado de US$ 0,00; isso não deve ser interpretado como garantia de custo zero ou como fatura final. Em 02/11/2026, também foram aplicadas retenções de 30 dias a grupos de logs dedicados da Lambda e do Glue, com validação real de entrega dos logs contínuos do Glue. Essa atividade e as novas execuções de novembro não fazem parte da fotografia de custos de outubro.
 
 ## 1. Objetivo e escopo
 
-Esta documentação registra as medições, premissas, estimativas e decisões de otimização de custos (*FinOps*) da arquitetura. O objetivo é manter o ambiente econômico durante períodos sem testes, sem eliminar recursos necessários à demonstração do pipeline batch e streaming.
+Esta documentação registra as medições, premissas, estimativas e decisões de otimização de custos (**FinOps**) da arquitetura. O objetivo é manter o ambiente econômico durante períodos sem testes, sem eliminar recursos necessários à demonstração do pipeline batch e streaming.
 
 O escopo inclui S3, AWS Glue, Athena, Lambda, SQS, Step Functions, CloudWatch e SNS. A análise usa três tipos de evidência:
 
 1. **Métricas operacionais:** CloudWatch, configurações dos recursos e histórico de execuções.
+
 2. **Uso e custo agregados:** AWS Cost Explorer, agrupado por serviço, tipo de uso e tipo de registro.
+
 3. **Referências de preço:** páginas oficiais de preços da AWS. São referências públicas, não substituem o preço efetivo da região/conta nem a fatura.
 
 ### 1.1 Limites da medição
 
 - A consulta do Cost Explorer usou `Start=2026-10-01` e `End=2026-10-30`. A data final é exclusiva; portanto, a consulta cobre 1º a 29/10/2026.
+
 - O Cost Explorer foi consultado na região de API `us-east-1`, conforme requerido pelo serviço. Os tipos de uso começavam por `USE2`, associados ao uso em Ohio (`us-east-2`).
+
 - Os resultados do Cost Explorer tinham `Estimated = True` e `UnblendedCost = 0` nas linhas retornadas. São dados estimados e agregados à conta/região; não houve atribuição completa por recurso ou por tag do projeto.
+
 - As métricas CloudWatch foram consultadas por recurso quando havia dimensão disponível. Nem toda métrica operacional representa diretamente uma unidade faturável.
+
 - A fotografia do S3 é um inventário de objetos/versionamento em um instante, não uma média mensal de GB-mês.
+
 - Os valores em USD calculados nesta documentação são aproximações de referência, não valores faturados.
 
 ## 2. Arquitetura e recursos considerados
@@ -65,7 +78,7 @@ As versões não atuais representam aproximadamente 23,25% do total observado. O
 
 ### 3.2 AWS Glue — execuções do ETL
 
-Foram avaliadas cinco execuções do job: duas concluídas com sucesso e três que falharam (incluindo as execuções de teste do Quality Gate).
+Na fotografia histórica de 1º a 29/10/2026, foram avaliadas cinco execuções do job: duas concluídas com sucesso e três que falharam (incluindo as execuções de teste do Quality Gate). As execuções adicionais de 02/11/2026 estão separadas na seção 3.12 e não foram incorporadas aos totais históricos abaixo.
 
 | Indicador | Resultado |
 |---|---:|
@@ -92,34 +105,6 @@ Como referência pública, a página de preços do AWS Glue apresenta US$ 0,44 p
 | **Total das cinco execuções** | **0,551944** | **US$ 0,24286** |
 
 Esse cálculo é uma estimativa baseada no consumo reportado nas execuções do Glue e no preço de referência. Não é uma reconciliação de fatura.
-
-### 3.2.1 Execuções adicionais do ETL — 02/11/2026
-
-Esta subseção complementa a fotografia histórica de 1º a 29/10/2026. Foram medidas duas execuções adicionais do mesmo job Glue em 02/11/2026:
-
-| Execução | Estado Glue | Estado Step Functions | Duração Glue | `DPUSeconds` |
-|---|---|---|---:|---:|
-| Primeira tentativa integrada (`run_id` `117b9877-6796-4039-b56e-6ab35e6974f0`) | `SUCCEEDED` | `FAILED` na leitura final do resultado Athena por JSONPath incorreto | 321 s | 642 |
-| Execução corrigida (`run_id` `d5095134-779d-453d-b55a-c67a020ca4f3`) | `SUCCEEDED` | `SUCCEEDED` | 371 s | 742 |
-| **Total adicional** | **2 Glue `SUCCEEDED`** | **1 `SUCCEEDED`; 1 falha de orquestração após a validação Athena `PASS`** | **692 s** | **1.384** |
-
-A primeira tentativa não representa falha do processamento Glue: o job terminou com sucesso e o Quality Gate Athena retornou `PASS`; a falha da máquina ocorreu somente ao ler o identificador da consulta devido ao JSONPath `$.gold_validation.QueryExecutionId`. O caminho foi corrigido para `$.gold_validation.QueryExecution.QueryExecutionId`, e a execução seguinte concluiu a orquestração inteira.
-
-| Indicador acumulado do job Glue | Resultado |
-|---|---:|
-| DPU-segundos das cinco execuções históricas (seção 3.2) | 1.987 |
-| DPU-segundos das duas execuções de 02/11 | 1.384 |
-| **DPU-segundos das sete execuções** | **3.371** |
-| **DPU-horas acumuladas** | **0,936389 h** |
-| Referência de preço usada na seção 3.2 | US$ 0,44 por DPU-hora |
-| Estimativa adicional para as duas execuções de novembro | US$ 0,16916 |
-| **Estimativa acumulada para as sete execuções** | **US$ 0,41201** |
-
-Conversão: `3.371 / 3.600 = 0,936389 DPU-hora`. Aplicando a mesma referência histórica de US$ 0,44/DPU-hora, o cálculo ilustrativo é aproximadamente US$ 0,41201. Esse valor estima somente o consumo de DPU reportado pelas sete execuções do job Glue; não é custo faturado nem reconciliação da conta. A referência de preço pode variar por região e data.
-
-Na execução integrada corrigida, houve duas consultas Athena `MSCK REPAIR TABLE` e uma consulta de validação Gold, todas `SUCCEEDED`. Somando as duas tentativas de 02/11, foram executadas seis consultas Athena relacionadas a reparos e Quality Gate. Na execução corrigida, os Query Execution IDs foram `400eb989-9ddf-4844-9e3c-a73272249ac1` (fato municipal), `cf993e91-5c07-4eaa-90d6-da0ab3eada84` (mart UF) e `94a4e66c-83d8-459a-baef-41777bfd36ce` (validação). Não se converte essa contagem em custo: a fotografia de Cost Explorer desta documentação termina em outubro e não há aqui uma reconciliação de cobrança de novembro.
-
-Os `DPUSeconds` acima são do job ETL e não incluem consumo dos crawlers. Também não foram calculados nesta atualização os custos de transições da Step Functions, armazenamento/requisições S3, Lambda, SQS, Athena ou CloudWatch. O resultado `187.200 registros / 8 tabelas / PASS` é uma métrica de qualidade e não uma unidade de faturamento.
 
 ### 3.3 AWS Glue — Cost Explorer agregado
 
@@ -156,7 +141,9 @@ O runtime, isoladamente, não determina o custo: é necessário considerar DPU c
 Foram observadas 13 consultas concluídas com sucesso no workgroup do projeto. Todas foram identificadas como DML. O total de bytes verificados foi:
 
 - Bytes processados: **1.886.683 bytes**.
+
 - Equivalente aproximado: **1,80 MiB**.
+
 - Consultas concluídas: **13**.
 
 Como referência, a página oficial de preços do Athena informa preço por volume de dados verificados, arredondamento para MB e mínimo de 10 MB por consulta SQL faturável; a página de preços deve ser consultada para o preço aplicável à região. Usando a referência pública de US$ 5/TB e assumindo que as 13 consultas estejam sujeitas ao mínimo de 10 MB, a estimativa ilustrativa é:
@@ -220,7 +207,7 @@ A página oficial do SQS informa 1 milhão de solicitações gratuitas por mês 
 
 ### 3.8 AWS Step Functions
 
-O Cost Explorer registrou `USE2-StateTransition = 4 StateTransitions`, além de pequenas quantidades de transferência de dados (`0,0000948943 GB` de entrada e `0,00001609 GB` de saída), com custo retornado de US$ 0,00 e `Estimated = True`.
+Na fotografia de custos de 1º a 29/10/2026, o Cost Explorer registrou `USE2-StateTransition = 4 StateTransitions`, além de pequenas quantidades de transferência de dados (`0,0000948943 GB` de entrada e `0,00001609 GB` de saída), com custo retornado de US$ 0,00 e `Estimated = True`. Esse dado não inclui as execuções de Step Functions realizadas em 02/11/2026, descritas na seção 3.12.
 
 A máquina de estados do projeto é do tipo Standard. A página oficial de preços indica 4.000 transições gratuitas por mês para workflows Standard. A franquia é agregada à conta e inclui transições de todas as máquinas e novas tentativas. Referência: [preços do AWS Step Functions](https://aws.amazon.com/step-functions/pricing/).
 
@@ -237,7 +224,7 @@ O Cost Explorer retornou as seguintes quantidades agregadas:
 | `TimedStorage-ByteHrs` | 0,0013838884 | GB-Month |
 | `VendedLog-Bytes` | 0,00000085 | GB |
 
-Todas as linhas retornaram custo de US$ 0,00 e `Estimated = True`. As quantidades de métricas e alarmes são unidades de uso faturável agregadas ao longo do período, não contagens simples de recursos configurados.
+Todas as linhas da fotografia de 1º a 29/10/2026 retornaram custo de US$ 0,00 e `Estimated = True`. As quantidades de métricas e alarmes são unidades de uso faturável agregadas ao longo do período, não contagens simples de recursos configurados. Os grupos de logs dedicados configurados em 02/11/2026 e seus eventos posteriores não estão incluídos nessa fotografia.
 
 A página de preços do CloudWatch apresenta franquias para determinados usos, como métricas personalizadas, solicitações de API, alarmes padrão e logs. A aplicação exata depende do tipo de métrica/alarme, região, volume e agregação da conta. Referência: [preços do Amazon CloudWatch](https://aws.amazon.com/cloudwatch/pricing/).
 
@@ -253,6 +240,56 @@ O Cost Explorer retornou:
 | Transferência de saída | 0,0000081889 | GB |
 
 Todas as linhas retornaram custo de US$ 0,00 e `Estimated = True`. A página oficial do SNS apresenta franquias mensais de requisições e entregas por e-mail, sujeitas às condições e agregação da conta. Referência: [preços do Amazon SNS](https://aws.amazon.com/sns/pricing/) e [FAQ de faturamento do SNS](https://aws.amazon.com/sns/faqs/).
+
+### 3.11 CloudWatch Logs — retenção e validação operacional em 02/11/2026
+
+Em 02/11/2026, o Terraform passou a gerenciar dois grupos de logs dedicados ao projeto, ambos com retenção de 30 dias:
+
+| Grupo de logs | Finalidade | Retenção configurada |
+|---|---|---:|
+| `/aws/lambda/tc-alfabetizacao-a9455abd-stream-consumer` | Logs da função Lambda | 30 dias |
+| `/aws-glue/jobs/logs-v2/tc-alfabetizacao-a9455abd` | Logs contínuos do job Glue do projeto | 30 dias |
+
+A configuração do job Glue mantém `--enable-continuous-cloudwatch-log = true` e define `--continuous-log-logGroup = /aws-glue/jobs/logs-v2/tc-alfabetizacao-a9455abd`.
+
+O plano revisado apresentou `1 to add, 2 to change, 0 to destroy`; a aplicação concluiu com `1 added, 2 changed, 0 destroyed`. O grupo Lambda existente foi importado e atualizado *in-place*. O grupo exclusivo do Glue foi criado e o job foi atualizado *in-place*. Ambos os recursos declararam `skip_destroy = true`.
+
+A validação na AWS confirmou `retentionInDays = 30` nos dois grupos. Depois da execução `validacao-cloudwatch-20261102-204946` (`SUCCEEDED`), o CloudWatch apresentou um fluxo no grupo exclusivo do Glue:
+
+- Grupo: `/aws-glue/jobs/logs-v2/tc-alfabetizacao-a9455abd`.
+- Log stream: `jr_16518f4f47e0e9ae0b60e1a199f8a5fe362d3671325c8fa60e8c3d9abf689cd8-1`.
+- Job Run ID registrado no fluxo: `jr_16518f4f47e0e9ae0b60e1a199f8a5fe362d3671325c8fa60e8c3d9abf689cd8`.
+- `get-log-events` retornou mensagens de inicialização do Spark e do `GlueCloudwatchSink`, incluindo a obtenção de credenciais pelo Instance Profile e a identificação do job/job run.
+
+Na resposta de `describe-log-streams`, `storedBytes` apareceu como zero; entretanto, `get-log-events` retornou mensagens para o fluxo. O valor de `storedBytes` não foi utilizado como medição do volume de logs.
+
+Os grupos padrão compartilhados do Glue — por exemplo, `/aws-glue/jobs/error`, `/aws-glue/jobs/output`, `/aws-glue/jobs/logs-v2` sem o sufixo do projeto e `/aws-glue/crawlers` — não foram alterados. A nova configuração direciona os logs contínuos do job ao grupo exclusivo; não migra os logs históricos dos grupos compartilhados nem altera automaticamente todos os demais tipos de log.
+
+`skip_destroy = true` protege o grupo contra exclusão pelo Terraform quando o recurso é removido da configuração. Isso não desativa a expiração dos eventos: a retenção de 30 dias continua aplicável. Os custos de ingestão e armazenamento desses logs após 02/11 ainda não foram reconciliados com uma fatura ou com alocação por tag; a fotografia do Cost Explorer de outubro não os inclui.
+
+### 3.12 Execuções AWS posteriores à fotografia de custos de outubro
+
+As execuções abaixo ocorreram em 02/11/2026 e devem ser tratadas como atividade posterior ao período de Cost Explorer de 1º a 29/10. Não foram incorporadas aos totais históricos das seções 3.2, 3.8 ou 4.
+
+| Execução Step Functions | Início (Brasília) | Fim (Brasília) | Estado da orquestração |
+|---|---|---|---|
+| `validacao-medallion-20261102-164701` | 16:47:02 | 16:57:20 | `FAILED` |
+| `validacao-final-20261102-170352` | 17:03:53 | 17:15:03 | `SUCCEEDED` |
+| `validacao-cloudwatch-20261102-204946` | 20:49:47 | 21:00:06 | `SUCCEEDED` |
+
+Na primeira tentativa, o Glue concluiu com `SUCCEEDED`, duração de 321 segundos e `642 DPUSeconds`, mas a Step Function falhou numa etapa posterior de recuperação do resultado por JSONPath. Na execução seguinte, o Glue concluiu com `SUCCEEDED`, duração de 371 segundos e `742 DPUSeconds`; a orquestração terminou `SUCCEEDED` e a validação Athena retornou `PASS` para oito tabelas, com 187.200 linhas somadas e uma linha em `mart_streaming_eventos` para o `run_id` analisado.
+
+Para as duas execuções Glue com `DPUSeconds` disponíveis:
+
+| Execução Glue | DPU-segundos | DPU-horas |
+|---|---:|---:|
+| `jr_c1c9b53c0bdba3f3807ecfa75304ed3d1d6fff5020bf02b5cd359f59f67ac919` | 642 | 0,178333 |
+| `jr_72e1d75c775ccf77fc2675b98ffc00f12b5c3652f41068de5119dbe88e444fd7` | 742 | 0,206111 |
+| **Total observado** | **1.384** | **0,384444** |
+
+Aplicando somente como referência o valor de US$ 0,44/DPU-hora utilizado nesta documentação, as duas execuções equivalem a aproximadamente **US$ 0,16916**. Trata-se de estimativa baseada em `DPUSeconds`, não de custo faturado ou atribuição final do Cost Explorer.
+
+A execução `validacao-cloudwatch-20261102-204946` também terminou `SUCCEEDED` e comprovou a chegada de logs contínuos ao grupo dedicado. O `DPUSeconds` dessa execução não foi incluído no cálculo acima porque não foi coletado no material de evidência utilizado nesta atualização. Também não foram calculados custos adicionais de crawlers, Athena, Step Functions ou CloudWatch para essas execuções. Não extrapolar os valores conhecidos para o custo total do pipeline.
 
 ## 4. Consolidação de custos e interpretação
 
@@ -278,8 +315,11 @@ Para Lambda, SQS, Step Functions, CloudWatch, SNS e Glue, as linhas exibidas pel
 Foi configurado um AWS Budget diário de **US$ 10,00**, com alerta de gasto real em **85% (US$ 8,50)**.
 
 - O alerta é um mecanismo de monitoramento/notificação.
+
 - O orçamento não é um limite rígido de consumo e não bloqueia automaticamente os recursos quando o valor é atingido.
+
 - Acompanhar também custos previstos e custos reais no Billing/Cost Explorer.
+
 - Validar o orçamento após alterações de arquitetura, aumento do volume de dados ou mudança do padrão de execução.
 
 ## 6. Decisão operacional para streaming
@@ -289,10 +329,15 @@ O streaming será utilizado somente durante testes e demonstrações. A infraest
 ### 6.1 Estado implantado e versionado
 
 - Event Source Mapping UUID: `38bbba4a-0154-4d4a-93f1-0d6e56b10a1d`.
+
 - Estado final confirmado na AWS: `Disabled`.
+
 - Código Terraform: `cloud/terraform/main.tf` com `enabled = false`.
+
 - Commit GitHub: `db5df8e` — `finops: disable streaming consumer by default`.
+
 - A alteração foi sincronizada no clone de validação; branch `main` alinhada com `origin/main`.
+
 - Validação local: `terraform fmt -check`, `terraform validate` e suíte Python com **9 testes aprovados**.
 
 ### 6.2 Habilitar para um teste
@@ -300,26 +345,41 @@ O streaming será utilizado somente durante testes e demonstrações. A infraest
 Execute no PowerShell com perfil e região corretos:
 
 ```powershell
+
 $awsProfile = "AWS-tech-challenge-terraform"
+
 $awsRegion = "us-east-2"
+
 $mappingUuid = "38bbba4a-0154-4d4a-93f1-0d6e56b10a1d"
 
 aws lambda update-event-source-mapping `
-    --uuid $mappingUuid `
-    --enabled `
-    --profile $awsProfile `
-    --region $awsRegion
+
+    --uuid $mappingUuid `
+
+    --enabled `
+
+    --profile $awsProfile `
+
+    --region $awsRegion
+
 ```
 
 A atualização pode retornar inicialmente `Enabling`. Aguarde e confirme `Enabled`:
 
 ```powershell
+
 aws lambda get-event-source-mapping `
-    --uuid $mappingUuid `
-    --profile $awsProfile `
-    --region $awsRegion `
-    --query State `
-    --output text
+
+    --uuid $mappingUuid `
+
+    --profile $awsProfile `
+
+    --region $awsRegion `
+
+    --query State `
+
+    --output text
+
 ```
 
 Envie os eventos de teste somente depois de confirmar `Enabled`.
@@ -327,30 +387,47 @@ Envie os eventos de teste somente depois de confirmar `Enabled`.
 ### 6.3 Desabilitar após o teste
 
 ```powershell
+
 aws lambda update-event-source-mapping `
-    --uuid $mappingUuid `
-    --no-enabled `
-    --profile $awsProfile `
-    --region $awsRegion
+
+    --uuid $mappingUuid `
+
+    --no-enabled `
+
+    --profile $awsProfile `
+
+    --region $awsRegion
+
 ```
 
 A atualização pode retornar inicialmente `Disabling`. Confirme até o estado ser `Disabled`:
 
 ```powershell
+
 do {
-    $state = aws lambda get-event-source-mapping `
-        --uuid $mappingUuid `
-        --profile $awsProfile `
-        --region $awsRegion `
-        --query State `
-        --output text
 
-    Write-Host "Estado atual: $state"
+    $state = aws lambda get-event-source-mapping `
 
-    if ($state -ne "Disabled") {
-        Start-Sleep -Seconds 3
-    }
+        --uuid $mappingUuid `
+
+        --profile $awsProfile `
+
+        --region $awsRegion `
+
+        --query State `
+
+        --output text
+
+    Write-Host "Estado atual: $state"
+
+    if ($state -ne "Disabled") {
+
+        Start-Sleep -Seconds 3
+
+    }
+
 } while ($state -ne "Disabled")
+
 ```
 
 ### 6.4 Atenção à retenção da fila
@@ -359,11 +436,15 @@ A retenção SQS está configurada em 86.400 segundos (24 horas). Enquanto o Eve
 
 ### 6.5 Terraform e estado
 
-A infraestrutura já existente está associada ao estado Terraform local no diretório original do projeto. O clone de validação do GitHub não contém `terraform.tfstate` e não deve ser usado para executar `terraform plan`/`apply` contra a conta como se fosse o diretório de gerenciamento da infraestrutura.
+Em 02/11/2026, foi feita uma comparação dos três arquivos de estado disponíveis: duas cópias no OneDrive e o arquivo do clone `C:\Users\erics\tech_challenge_clone_validacao\cloud\terraform\terraform.tfstate`. Os três apresentavam o mesmo `lineage` e os mesmos 31 recursos principais. As cópias do OneDrive estavam no `serial 32`; o state do clone estava no `serial 42`. O `terraform plan -refresh-only` executado no clone retornou `No changes`, indicando que os objetos remotos correspondiam à configuração e ao state naquele momento.
 
-O plano gerado no diretório original reconheceu os recursos existentes e propôs `0 to add, 2 to change, 0 to destroy`. As duas mudanças eram atualizações in-place do pacote da Lambda (hash diferente) e do objeto do script Glue no S3 (ETag diferente). Elas não eram necessárias para a decisão FinOps e **não foram aplicadas**. O Event Source Mapping não apareceu como alteração pendente porque a AWS já estava `Disabled` e o código passou a declarar `enabled = false`.
+A partir dessa validação, o clone passou a ser o diretório de trabalho utilizado para a mudança de CloudWatch Logs. Os dois arquivos do OneDrive não foram alterados e devem ser tratados como cópias históricas, não como estados concorrentes para novos `apply`. Foi criado backup do state antes da alteração e outro após a importação do grupo Lambda, no diretório local `%LOCALAPPDATA%\TechChallenge\terraform-state-backups`.
 
-Não copie, publique ou descarte os arquivos `terraform.tfstate`, `terraform.tfstate.backup` ou o diretório `.terraform` sem procedimento de gestão de estado. Antes de qualquer `terraform apply`, revisar o plano completo e verificar se há alterações fora do escopo.
+O grupo Lambda existente `/aws/lambda/tc-alfabetizacao-a9455abd-stream-consumer` foi importado para `aws_cloudwatch_log_group.lambda_stream_consumer`. O plano salvo e revisado para a política de retenção apresentou `1 to add, 2 to change, 0 to destroy`. A aplicação terminou com `1 added, 2 changed, 0 destroyed`: criou `aws_cloudwatch_log_group.glue_continuous`, atualizou in-place o grupo Lambda e atualizou in-place `aws_glue_job.pipeline` para apontar para o grupo de logs contínuos dedicado.
+
+A configuração aplicada declara `retention_in_days = 30` e `skip_destroy = true` nos dois grupos de logs. O job Glue mantém `--enable-continuous-cloudwatch-log = true` e usa `--continuous-log-logGroup` para o grupo `/aws-glue/jobs/logs-v2/tc-alfabetizacao-a9455abd`. A verificação na AWS confirmou 30 dias de retenção nos dois grupos e a execução de 02/11 comprovou a chegada de mensagens no grupo Glue.
+
+Não copie, publique ou descarte `terraform.tfstate`, `terraform.tfstate.backup`, backups locais ou o diretório `.terraform` sem procedimento de gestão de estado. Esses arquivos podem conter informações sensíveis. Para futuras mudanças, utilizar somente o diretório/state escolhido como gerenciamento, revisar o plano completo e conferir que não existam exclusões ou substituições inesperadas antes de qualquer `terraform apply`.
 
 ## 7. Recomendações e backlog FinOps
 
@@ -372,6 +453,7 @@ Não copie, publique ou descarte os arquivos `terraform.tfstate`, `terraform.tfs
 | Alta | Manter Event Source Mapping desabilitado fora dos testes | Reduz polling desnecessário; confirmar estado `Disabled` após cada demonstração |
 | Alta | Acompanhar a métrica `NumberOfEmptyReceives` durante os testes | Distinguir volume de eventos de chamadas vazias e medir evolução |
 | Alta | Reconciliar SQS CloudWatch × Cost Explorer | CloudWatch indicou 20.779 recebimentos vazios, mas Cost Explorer mostrou 19.304 requisições; investigar escopo, período e contabilização |
+| Média | Monitorar ingestão e retenção dos grupos de logs dedicados | Conferir retenção de 30 dias, fluxo de logs contínuos do Glue e volume faturável após novas execuções; não alterar os grupos compartilhados sem avaliar outros jobs/crawlers |
 | Média | Ativar e usar tags de alocação de custos | A consulta atual é agregada à conta; habilitar `Project` em Cost Allocation Tags, aguardar disponibilidade e filtrar relatórios futuros |
 | Média | Extrair custos S3 por uso e classe de armazenamento | O inventário de 0,2564 GiB é instantâneo; falta GB-mês e solicitações por classe |
 | Média | Reconciliar GB-segundos da Lambda | CloudWatch derivou ~0,1533 GB-s; Cost Explorer agregou 0,2565 GB-s |
@@ -381,50 +463,77 @@ Não copie, publique ou descarte os arquivos `terraform.tfstate`, `terraform.tfs
 ## 8. Rotina mensal de acompanhamento
 
 1. No início do mês, registrar período, região e data/hora de extração.
+
 2. No Cost Explorer, filtrar cada serviço, agrupar por `USAGE_TYPE` e `RECORD_TYPE`, e manter a coluna `Estimated` junto dos valores.
+
 3. Para serviços com recursos identificáveis, coletar métricas CloudWatch por dimensão do recurso e comparar com o Cost Explorer sem presumir equivalência entre métricas operacionais e unidades faturáveis.
+
 4. Registrar Glue `DPUSeconds`, estado e duração de cada execução; separar execuções bem-sucedidas e falhas.
+
 5. Registrar Athena bytes verificados e quantidade de consultas; priorizar Parquet, compressão, filtros e seleção explícita de colunas.
+
 6. Registrar inventário S3 e versões não atuais, sem confundir tamanho instantâneo com GB-mês.
+
 7. Confirmar o estado `Disabled` do Event Source Mapping após cada demonstração e verificar mensagens visíveis/idade na fila.
-8. Comparar valores estimados com a fatura final e registrar créditos, descontos, impostos e eventuais cobranças compartilhadas.
+
+8. Conferir os grupos de logs Lambda e Glue: retenção de 30 dias, `skip_destroy = true` e chegada de logs contínuos ao grupo dedicado do Glue; acompanhar ingestão/armazenamento sem inferir custo somente por `storedBytes`.
+
+9. Comparar valores estimados com a fatura final e registrar créditos, descontos, impostos e eventuais cobranças compartilhadas.
 
 ### 8.1 Consulta Cost Explorer — modelo
 
 A API do Cost Explorer deve ser chamada em `us-east-1`; a região de uso aparece nos códigos dos tipos de uso. Exemplo de intervalo mensal (a data `End` é exclusiva):
 
 ```powershell
+
 aws ce get-cost-and-usage `
-    --time-period Start=2026-10-01,End=2026-11-01 `
-    --granularity MONTHLY `
-    --metrics UnblendedCost UsageQuantity `
-    --group-by Type=DIMENSION,Key=USAGE_TYPE Type=DIMENSION,Key=RECORD_TYPE `
-    --profile AWS-tech-challenge `
-    --region us-east-1 `
-    --output json
+
+    --time-period Start=2026-10-01,End=2026-11-01 `
+
+    --granularity MONTHLY `
+
+    --metrics UnblendedCost UsageQuantity `
+
+    --group-by Type=DIMENSION,Key=USAGE_TYPE Type=DIMENSION,Key=RECORD_TYPE `
+
+    --profile AWS-tech-challenge `
+
+    --region us-east-1 `
+
+    --output json
+
 ```
 
 Para atribuição ao projeto, filtrar pela tag de custo `Project` somente depois de ativá-la no Billing e verificar a disponibilidade dos dados. Enquanto isso, declarar expressamente que os totais por serviço são agregados à conta.
 
 ## 9. Conclusão
 
-A otimização implementada é deliberadamente simples e reversível: manter a fila e a Lambda prontas, mas deixar o Event Source Mapping desabilitado no uso normal. O polling observado em 29/10/2026 foi desproporcional ao volume de mensagens e justificou a decisão operacional, sem comprometer o fluxo batch.
+A otimização implementada combina duas decisões operacionais: manter a fila SQS e a Lambda prontas, mas deixar o Event Source Mapping desabilitado fora de testes; e aplicar retenção de 30 dias a grupos de logs dedicados da Lambda e dos logs contínuos do Glue, com gerenciamento via Terraform. O polling observado em 29/10/2026 foi desproporcional ao volume de mensagens e justificou a primeira decisão. A segunda foi aplicada em 02/11 e validada por uma execução real que gerou mensagens no grupo exclusivo do Glue.
 
-Os dados atuais sustentam a conclusão de baixo volume observado e uma oportunidade concreta de reduzir atividade de polling ociosa. Eles ainda não sustentam um custo mensal total definitivo para o projeto, pois o Cost Explorer estava estimado, agregava serviços à conta e não havia alocação completa por tag/recurso. A evolução da análise deve priorizar atribuição por projeto, reconciliação das métricas SQS/Lambda e conferência com a fatura final.
+Os dados sustentam a conclusão de baixo volume observado e oportunidades concretas de reduzir polling ocioso e controlar o acúmulo de logs. Eles ainda não sustentam um custo mensal total definitivo para o projeto: a fotografia do Cost Explorer de outubro estava estimada e agregada à conta; as execuções e os logs de novembro ainda não foram reconciliados com uma fatura nem alocados integralmente por tag/recurso. A evolução da análise deve priorizar atribuição por projeto, reconciliação das métricas SQS/Lambda e CloudWatch, acompanhamento da retenção e conferência com a fatura final.
 
 ## 10. Referências oficiais AWS
 
 - [AWS Glue — preços](https://aws.amazon.com/glue/pricing/)
+
 - [Amazon S3 — preços](https://aws.amazon.com/s3/pricing/)
+
 - [Amazon Athena — preços](https://aws.amazon.com/athena/pricing/)
+
 - [AWS Lambda — preços](https://aws.amazon.com/lambda/pricing/)
+
 - [Amazon SQS — preços](https://aws.amazon.com/sqs/pricing/)
+
 - [AWS Step Functions — preços](https://aws.amazon.com/step-functions/pricing/)
+
 - [Amazon CloudWatch — preços](https://aws.amazon.com/cloudwatch/pricing/)
+
 - [Amazon SNS — preços](https://aws.amazon.com/sns/pricing/)
+
 - [AWS Cost Explorer API — GetCostAndUsage](https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_GetCostAndUsage.html)
+
 - [Lambda — SQS event source mapping](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html)
 
 ---
 
-**Controle de versão:** esta documentação foi consolidada com base nas saídas de CLI, métricas e consultas fornecidas durante a sessão de trabalho de 30/10/2026. Atualizar as medições e as premissas sempre que a arquitetura ou o padrão de execução mudar.
+**Controle de versão:** documento atualizado em 03/11/2026. A fotografia de custos do Cost Explorer continua restrita a 01–29/10/2026; foram acrescentadas evidências operacionais, execuções e configuração de retenção aplicadas/validadas em 02/11/2026. Atualizar as medições, premissas e custos quando houver nova extração do Cost Explorer ou fatura consolidada.
