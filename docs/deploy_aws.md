@@ -108,6 +108,12 @@ $goldCrawler = terraform -chdir=cloud/terraform output -raw gold_crawler_name
 
 A infraestrutura documentada inclui bucket S3 versionado/criptografado, SQS Standard, Lambda e event source mapping, Glue Job, roles/policies IAM, Glue Database/Crawlers, Athena Workgroup, Step Functions, CloudWatch Alarm e SNS.
 
+### 6.1 Nível de tabela dos Crawlers
+
+Os Crawlers Silver e Gold percorrem, respectivamente, `silver/` e `gold/`. O caminho físico é `<camada>/<tabela>/run_id=<id>/`; por isso, o nível absoluto da tabela a partir do bucket é 2. O Terraform define `Grouping.TableLevelConfiguration = 2` nos dois recursos `aws_glue_crawler`. Essa opção fixa cada diretório da tabela como raiz e deixa `run_id` como partição.
+
+Não configure o nível 3: esse nível corresponde ao diretório `run_id=...` e pode recriar o problema de catalogar cada execução como tabela separada. A alteração de configuração dos Crawlers e a limpeza dos registros antigos estão detalhadas em [`glue_catalog.md`](glue_catalog.md).
+
 ## 7. Carga Bronze
 
 O job Glue espera os sete arquivos canônicos no prefixo `bronze/source/`:
@@ -128,11 +134,11 @@ aws s3 ls "s3://$bucket/bronze/streaming/" --recursive
 
 Verifique CloudWatch Logs da função Lambda e o namespace `AlfabetizacaoPipeline`, métricas `EventsIngested`, `InvalidEvents` e `EventLatencySeconds`.
 
-Os eventos são simulados. A validação real mostrou que os eventos de teste não continham todas as colunas exigidas para um registro analítico de alfabetização; por isso, o processamento Glue os encaminha para quarentena. Não consulte `mart_streaming_eventos` como se ela tivesse sido gerada na execução AWS validada.
+Os eventos são simulados e não representam indicadores oficiais. Na execução histórica de 29/10, a mensagem de teste foi encaminhada para quarentena por não conter o esquema analítico completo. Na validação integrada de 02/11 foi encontrada uma linha sintética em `mart_streaming_eventos` para o `run_id` testado.
 
 ## 9. Executar a pipeline
 
-A máquina Step Functions chama o Glue Job de forma síncrona e trata falha com Retry/Catch. Ela **não inicia os crawlers**.
+A máquina Step Functions executa o Glue Job de forma síncrona e, após sucesso, inicia e aguarda os Crawlers Silver e Gold, executa os reparos de partição previstos e valida as oito tabelas Gold no Athena. A execução termina com sucesso somente quando o Quality Gate retorna `PASS`.
 
 ```powershell
 $executionArn = aws stepfunctions start-execution `
@@ -156,14 +162,7 @@ do {
 aws stepfunctions describe-execution --execution-arn $executionArn
 ```
 
-Após sucesso, execute os crawlers separadamente:
-
-```powershell
-aws glue start-crawler --name $silverCrawler
-aws glue start-crawler --name $goldCrawler
-```
-
-Aguarde ambos retornarem ao estado `READY` e verifique `LastCrawl.Status = SUCCEEDED`.
+Após a execução integrada terminar com `SUCCEEDED`, **não inicie os Crawlers manualmente**: eles já foram executados pela Step Functions. Para reaplicar somente a configuração de catalogação sobre os dados S3 existentes, sem executar novamente o Glue Job, siga o procedimento em [`glue_catalog.md`](glue_catalog.md).
 
 ## 10. Consultar Athena
 
