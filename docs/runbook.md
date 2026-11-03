@@ -67,16 +67,9 @@ $executionArn = aws stepfunctions start-execution --state-machine-arn $stateMach
 aws stepfunctions describe-execution --execution-arn $executionArn
 ```
 
-Acompanhe até `SUCCEEDED` ou `FAILED`. A Step Functions executa o Glue Job; os crawlers não fazem parte dessa definição e precisam ser iniciados separadamente.
+Acompanhe até `SUCCEEDED` ou `FAILED`. A Step Functions executa Glue, Crawlers Silver/Gold, reparos de partição e Quality Gate Athena. Em uma execução integrada bem-sucedida, não inicie os Crawlers novamente manualmente.
 
-Após sucesso:
-
-```powershell
-aws glue start-crawler --name $silverCrawler
-aws glue start-crawler --name $goldCrawler
-```
-
-Aguarde os dois crawlers finalizarem. `State = READY` informa que não estão executando; também confirme `LastCrawl.Status = SUCCEEDED`.
+Para corrigir a configuração dos Crawlers sobre os dados já existentes, sem refazer o Glue Job, siga [`glue_catalog.md`](glue_catalog.md).
 
 ## 5. Executar/monitorar streaming de demonstração
 
@@ -134,12 +127,13 @@ Compare os resultados com `evidencias_execucao.md`. Registre bytes escaneados e 
 - Verifique o caminho S3 configurado no crawler e permissões de leitura/listagem.
 - Aguarde estado `READY` e confirme `LastCrawl.Status`.
 
-### Athena não encontra tabela ou retorna duplicidade
+### Athena não encontra tabela ou o catálogo contém tabelas `run_id_*`
 
-- Verifique Glue Database e resultado do último crawler.
-- Use os nomes efetivos de tabela do catálogo.
-- Filtre `run_id` para evitar contar várias execuções.
-- Confirme location S3 e partição `run_id`.
+- Verifique Glue Database, configuração `Grouping.TableLevelConfiguration` e resultado do último crawler.
+- Para este layout, o nível de tabela deve ser 2: `silver/<tabela>/run_id=...` e `gold/<tabela>/run_id=...`.
+- Confirme que a tabela principal possui `run_id` em `PartitionKeys` e que seu `Location` termina no diretório da tabela, não em um diretório de execução.
+- Os registros antigos `run_id_*` não são removidos automaticamente porque `DeleteBehavior = LOG`; aplique a limpeza seletiva somente após seguir [`glue_catalog.md`](glue_catalog.md).
+- Filtre `run_id` nas consultas analíticas para não combinar execuções históricas.
 
 ### Alarme de erros Lambda
 
