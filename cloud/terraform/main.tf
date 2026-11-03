@@ -402,7 +402,7 @@ resource "aws_glue_crawler" "silver" {
   configuration = jsonencode({
     Version = 1.0
     Grouping = {
-      # O bucket e o nível 1 (silver/ ou gold/); cada diretório de tabela é nível 2.
+      # A primeira pasta abaixo do bucket (silver/ ou gold/) é nível 1; a tabela é nível 2.
       # run_id=... permanece como partição no nível 3.
       TableLevelConfiguration = 2
     }
@@ -424,7 +424,7 @@ resource "aws_glue_crawler" "gold" {
   configuration = jsonencode({
     Version = 1.0
     Grouping = {
-      # O bucket e o nível 1 (silver/ ou gold/); cada diretório de tabela é nível 2.
+      # A primeira pasta abaixo do bucket (silver/ ou gold/) é nível 1; a tabela é nível 2.
       # run_id=... permanece como partição no nível 3.
       TableLevelConfiguration = 2
     }
