@@ -176,19 +176,25 @@ A execução local documentada é `20261029T003707Z_763b68ad`, `SUCCESS`, duraç
 5. A ausência de `mart_streaming_eventos` na execução AWS de 29/10 não deve ser generalizada para todas as execuções: na validação AWS de 02/11 às 17:03 foi retornada uma linha para o `run_id` daquela execução.
 6. A validação do grupo CloudWatch confirma que mensagens foram recuperadas de um fluxo dedicado de logs contínuos do Glue; não constitui, por si só, uma medição de custo nem de volume faturável.
 
-## 6. Evidências que devem ser mantidas para a apresentação
+## 6. Evidências visuais e pendências para a apresentação
 
-- Prints do Console Glue com Job Run ID, configuração e estado.
-- Prints dos crawlers e das tabelas no Data Catalog.
-- Print do Athena com consulta filtrada por `run_id` e bytes escaneados.
-- Print do CloudWatch Alarm e das métricas customizadas.
-- Print do AWS Budget e da notificação configurada, sem expor endereço de e-mail.
-- Evidência do CloudWatch Logs com o grupo dedicado, retenção de 30 dias, fluxo e mensagens de `GlueCloudwatchSink`.
-- Print da execução `validacao-cloudwatch-20261102-204946` com status `SUCCEEDED`.
-- Vídeo executivo de até cinco minutos, caso ainda não tenha sido gravado.
+As capturas de tela do Console AWS estão organizadas em [`evidencias/aws/README.md`](evidencias/aws/README.md). O índice descreve o que cada imagem comprova e suas limitações de interpretação. O pacote inclui evidências de Step Functions, Glue Job, Crawlers, Data Catalog, consulta exploratória no Athena, CloudWatch Logs, Lambda/SQS, S3 e AWS Budgets.
 
-Não inclua Access Keys, tokens, e-mail privado, IDs de conta ou dados pessoais nas capturas. Os arquivos JSON desta pasta são resumos estruturados; não substituem exportações brutas de API/CloudWatch.
+**Limitações das capturas incluídas:**
 
+- A captura do Athena mostra uma consulta exploratória `SELECT ... LIMIT 10`; ela não deve ser apresentada como captura do Quality Gate formal `PASS`. O resultado formal está nos registros textuais/estruturados da execução.
+- A captura atual do Data Catalog mostra 40 tabelas na Console em 03/11/2026. A contagem histórica de 12 tabelas refere-se a uma fotografia anterior e não deve ser comparada como se fosse o mesmo instante.
+- A captura do Daily Budget mostra `Filtros incluídos: Nenhum`; é evidência de configuração orçamentária de escopo geral, não de custo atribuído exclusivamente ao Tech Challenge.
+- A captura da Lambda mostra a visão de monitoramento e a integração com SQS; o estado `Disabled` do Event Source Mapping deve ser demonstrado por consulta/tela específica caso seja exigido como evidência visual.
+
+**Capturas complementares recomendadas, caso haja tempo:**
+
+- Athena com a consulta de validação formal filtrada pelo `run_id`, exibindo o resultado `PASS`.
+- CloudWatch Alarm e métricas customizadas no namespace `AlfabetizacaoPipeline`.
+- Event Source Mapping da Lambda com estado `Disabled`.
+- Vídeo executivo de até cinco minutos, caso exigido pela avaliação.
+
+As imagens incluídas ocultam o perfil da Console, o ARN que expõe o ID da conta e o endereço de e-mail. Não inclua Access Keys, tokens, e-mails privados, IDs de conta ou dados pessoais em novas capturas. Os arquivos JSON desta pasta são resumos estruturados; não substituem exportações brutas de API/CloudWatch.
 ---
 
-**Controle de versão:** documento atualizado em 03/11/2026 com evidências locais e AWS fornecidas até 02/11/2026. A fotografia de custos de 01–29/10/2026 permanece histórica; as novas execuções de 02/11 e a validação do CloudWatch estão identificadas separadamente.
+**Controle de versão:** documento atualizado em 03/11/2026 com evidências locais e AWS fornecidas até 03/11/2026. A fotografia de custos de 01–29/10/2026 permanece histórica; as novas execuções de 02/11 e a validação do CloudWatch estão identificadas separadamente.
