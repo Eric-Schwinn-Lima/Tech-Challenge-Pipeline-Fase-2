@@ -121,7 +121,7 @@ $safeLocation = "^s3://$([regex]::Escape($bucket))/(silver|gold)/[^/]+/run_id=[^
 $candidates = @(
     $catalog.TableList | Where-Object {
         $_.Name -like "run_id_*" -and
-        @($_.PartitionKeys).Count -eq 0 -and
+        @($_.PartitionKeys | Where-Object { $_ }).Count -eq 0 -and
         $_.StorageDescriptor.Location -match $safeLocation
     }
 )
