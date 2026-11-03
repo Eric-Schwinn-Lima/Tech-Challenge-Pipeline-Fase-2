@@ -8,12 +8,14 @@ Este diretório reúne a documentação técnica, operacional, de dados, evidên
 |---|---|
 | [`architecture.md`](architecture.md) | Arquitetura, fluxo batch/streaming, responsabilidades e decisões técnicas |
 | [`deploy_aws.md`](deploy_aws.md) | Pré-requisitos, autenticação, Terraform, carga, execução, catálogo e limpeza |
+| [`glue_catalog.md`](glue_catalog.md) | Diagnóstico e correção do nível dos Crawlers, validação e remoção seletiva de metadados redundantes |
 | [`dicionario_dados.md`](dicionario_dados.md) | Fontes, granularidade, chaves, campos canônicos e códigos oficiais |
 | [`evidencias_execucao.md`](evidencias_execucao.md) | Registro consolidado das execuções local e AWS, limitações e evidências pendentes |
 | [`evidencias_execucao_local.md`](evidencias_execucao_local.md) | Detalhe da execução local com fontes reais e eventos simulados |
 | [`finops.md`](finops.md) | Medições observadas, orçamento, alertas, custo e limites da projeção |
 | [`runbook.md`](runbook.md) | Operação, diagnóstico, reexecução, validação e desligamento seguro |
 | [`evidencias/`](evidencias/) | Resumos JSON/JSONL legíveis por máquina; não substituem os logs brutos da AWS |
+| [`evidencias/aws/README.md`](evidencias/aws/README.md) | Índice de capturas do Console AWS e limites de interpretação |
 
 ## Convenções importantes
 
@@ -26,4 +28,4 @@ Este diretório reúne a documentação técnica, operacional, de dados, evidên
 
 ## Data de referência
 
-Resultados AWS e FinOps consolidados com base nas evidências disponíveis em **29 de outubro de 2026**. Uma nova execução deve gerar novo registro, sem sobrescrever os resultados históricos.
+Resultados AWS e FinOps consolidados com base nas evidências disponíveis até **03 de novembro de 2026**. A fotografia do catálogo com 40 entradas foi identificada como anterior à correção do nível dos Crawlers; consulte `glue_catalog.md` para a mudança e o procedimento operacional. Uma nova execução deve gerar novo registro, sem sobrescrever os resultados históricos.
