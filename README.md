@@ -1,772 +1,756 @@
 # Pipeline Híbrida de Alfabetização no Brasil — Tech Challenge Fase 2
+**Projeto:** Pipeline Híbrida de Alfabetização no Brasil
 
-**Projeto acadêmico de Engenharia de Dados | POSTECH / FIAP — AI Scientist**
+**Curso:** POSTECH / FIAP — AI Scientist
 
-[![Python](https://img.shields.io/badge/Python-3.11--3.13-blue)](https://www.python.org/)
-[![AWS](https://img.shields.io/badge/AWS-S3%20%7C%20Glue%20%7C%20Athena-orange)](https://aws.amazon.com/)
-[![Terraform](https://img.shields.io/badge/IaC-Terraform-844FBA)](https://www.terraform.io/)
-[![Tests](https://img.shields.io/badge/tests-12%20passed-brightgreen)](#testes)
+**Repositório:** [Tech-Challenge-Pipeline-Fase-2](https://github.com/Eric-Schwinn-Lima/Tech-Challenge-Pipeline-Fase-2)
 
-> **Status da entrega (03/11/2026):** a execução integrada de 02/11/2026 concluiu Glue, Crawlers e Quality Gate Athena com sucesso. Em 03/11/2026, a configuração `Grouping.TableLevelConfiguration = 2` foi aplicada aos Crawlers Silver e Gold, e ambos concluíram novos rastreamentos com status `SUCCEEDED`. Foram removidas seletivamente 24 definições redundantes `run_id_*` do Glue Data Catalog, preservando os arquivos no S3 e as 16 tabelas principais (8 Silver e 8 Gold). O Athena confirmou as 16 tabelas e o particionamento histórico da fato municipal: oito execuções com 23.995 registros cada, totalizando 191.960 linhas na tabela ao considerar todos os snapshots. A partição mais recentemente criada no catálogo foi `feb4e177-4ea5-4456-bb6d-2fd0832b1507`, com 23.995 registros. Esses 191.960 registros são linhas acumuladas entre snapshots, não municípios únicos. O total de 187.200 da seção 9.4 é uma métrica distinta do Quality Gate integrado, que soma oito tabelas Gold naquela execução.
+**Região AWS:** `us-east-2` — Ohio
 
-## 1. Visão geral
+**Arquitetura:** Amazon S3, AWS Glue 4.0 / PySpark, Step Functions, SQS, Lambda, Glue Data Catalog, Athena, CloudWatch e Terraform.
 
-Este projeto implementa uma pipeline de dados híbrida — processamento batch e ingestão de eventos — para integrar dados públicos associados ao Indicador Criança Alfabetizada. A solução preserva os arquivos recebidos, padroniza as tabelas, aplica verificações de qualidade e disponibiliza produtos analíticos para acompanhar resultados de alfabetização e sua comparação com metas.
+**Autor:** Eric Schwinn Lima
 
-A referência técnica adotada para classificar a criança alfabetizada é o corte de **743 pontos na escala de proficiência do Saeb**, conforme a Pesquisa Alfabetiza Brasil. A meta pactuada para a rede pública na trajetória até 2030 deve ser analisada separadamente da aspiração de universalização da alfabetização.
+**Vídeo executivo:** (https://youtu.be/9-dUN78Z7yM)  
+**Apresentação:** (\docs\apresentacao)
 
-O projeto permite investigar questões como:
+---
+## 1. Resumo
+O projeto implementa uma pipeline híbrida de dados para integrar informações públicas relacionadas à alfabetização no Brasil, preservar os dados de origem, padronizar tabelas, executar verificações de qualidade e disponibilizar produtos analíticos para consulta.
 
-- Qual é o resultado publicado por município e por UF, considerando ano, série e rede?
-- Qual é a distância entre o resultado observado e as metas disponíveis?
-- Como o indicador evolui ao longo dos anos?
-- Qual é a diferença entre o indicador agregado publicado e a taxa calculada a partir dos microdados?
-- Quais eventos chegaram pelo fluxo SQS/Lambda e quais são apenas eventos simulados?
+A solução utiliza arquitetura Medallion, dividida em três camadas:
 
-**Importante:** os eventos de streaming usados nos testes são sintéticos. Eles demonstram a integração técnica, mas não representam atualização oficial do indicador em tempo real.
+- **Bronze:** preservação dos dados brutos e histórico de ingestão.
 
-## 2. Fonte de dados
+- **Silver:** dados padronizados, normalizados e validados.
 
-A fonte principal é a [Base dos Dados — Avaliação da Alfabetização](https://basedosdados.org/dataset/073a39d4-89cf-4068-b1e8-34ed0d9c0b72), dataset `br_inep_avaliacao_alfabetizacao`, derivado de resultados do Inep.
+- **Gold:** fatos, indicadores e produtos analíticos para consulta.
 
-A solução utiliza arquivos CSV exportados da fonte e enviados para a AWS. Essa abordagem evita exigir um projeto de billing do Google Cloud para consultas BigQuery e mantém o processamento operacional concentrado na AWS.
+O processamento batch é realizado pelo AWS Glue 4.0 com PySpark. A infraestrutura é provisionada pelo Terraform. A orquestração completa é realizada pelo AWS Step Functions, que executa o Glue, acompanha os crawlers Silver e Gold, repara partições e valida os resultados por meio do Athena.
 
-### Tabelas utilizadas
+A integração de eventos utiliza Amazon SQS Standard, AWS Lambda e S3. Os eventos de demonstração são sintéticos e não representam atualização oficial do indicador em tempo real.
 
-| Arquivo/tabela | Uso na pipeline |
-|---|---|
-| `uf` | Resultados publicados por UF, ano, série e rede. |
-| `municipio` | Resultados publicados por município, ano, série e rede. |
-| `meta_alfabetizacao_brasil` | Metas nacionais para comparação temporal. |
-| `meta_alfabetizacao_uf` | Metas estaduais por ano e recorte. |
-| `meta_alfabetizacao_municipio` | Metas municipais por ano e recorte. |
-| `alunos` | Microdados usados no cálculo exploratório da taxa ponderada de alfabetização. |
-| `dicionario` | Tabela auxiliar oficial para interpretação dos códigos categóricos. |
+**Resultado final da validação AWS em 02/11/2026:**
+| Indicador | Resultado |
+|---|---:|
+| Step Functions | `SUCCEEDED` |
+| Glue Job | `SUCCEEDED` |
+| Quality Gate | `PASS` |
+| Tabelas Gold verificadas | 8 |
+| Linhas somadas nas oito tabelas Gold | 187.200 |
+| Evento sintético validado na Gold | 1 |
+| Erros da execução final | 0 |
 
-O dicionário oficial é fornecido separadamente das seis tabelas de dados. Ele é utilizado para interpretar códigos de `rede`, `serie`, `presenca` e `alfabetizado` quando as categorias são compatíveis, mantendo os códigos originais nas tabelas.
+A execução final foi concluída em aproximadamente 11 minutos e 10 segundos. O total de 187.200 corresponde à soma das linhas contabilizadas nas oito tabelas Gold naquela validação; não representa pessoas, alunos ou municípios únicos.
 
-### Disponibilidade dos arquivos
+Em 03/11/2026, após o ajuste dos Crawlers e a limpeza seletiva dos metadados redundantes, o Glue Data Catalog passou a apresentar **16 tabelas principais: oito Silver e oito Gold**, sem entradas extras `run_id_*`. Os objetos de dados no S3 foram preservados.
 
-O repositório **não distribui o ZIP completo dos microdados nem os CSVs completos de alunos**. Esses arquivos não são versionados para evitar publicar grandes volumes de dados de origem. O arquivo auxiliar `data/exports_raw/dicionario.csv` e o inventário `data/exports_raw/source_inventory.json` estão versionados.
+## 2. Objetivo e escopo funcional
+A pipeline integra os resultados publicados de alfabetização por Brasil, UF e município, metas nacionais, estaduais e municipais, microdados de alunos e um dicionário de códigos.
 
-Para executar a pipeline com os dados completos:
+O projeto permite:
 
-1. Acesse a [Base dos Dados — Avaliação da Alfabetização](https://basedosdados.org/dataset/073a39d4-89cf-4068-b1e8-34ed0d9c0b72).
-2. Baixe o pacote ZIP com as seis tabelas de dados.
-3. Salve o arquivo com o nome `dados_oficiais_base_dados.zip` em `data/exports_raw/`.
-4. Mantenha `dicionario.csv` nessa mesma pasta. O arquivo já está presente no repositório; caso obtenha uma versão atualizada, confira sua origem e estrutura antes de substituí-lo.
-5. Execute `python scripts/prepare_real_data.py` para extrair e preparar as fontes.
 
-Os CSVs preparados em `data/source/` e os arquivos brutos extraídos em `data/exports_raw/` são locais e estão ignorados pelo Git. Os arquivos pequenos em `tests/fixtures/` são amostras sintéticas/de teste e não substituem as fontes oficiais completas.
+- Consultar resultados por município e unidade federativa.
 
-### Preparação e decisões de padronização
+- Comparar resultados com metas disponíveis.
 
-O adaptador de preparação realiza as seguintes conversões, preservando os arquivos de origem:
+- Analisar a evolução temporal dos indicadores.
 
-- Deriva `sigla_uf` a partir do prefixo do código IBGE, pois os arquivos de alunos e o agregado municipal não trazem essa coluna em sua forma original.
-- Converte as colunas de metas de 2024 a 2030 do formato largo para linhas por ano-alvo, mantendo o ano do snapshot para rastreabilidade.
-- Define `serie = 2`, conforme o recorte do indicador tratado no enunciado do projeto.
-- Resolve categorias de rede das tabelas de metas a partir do dicionário oficial.
-- Mantém os arquivos originais separados das tabelas canônicas usadas pela pipeline.
+- Investigar diferenças entre resultados agregados publicados e cálculos exploratórios derivados dos microdados.
 
-**Equivalência semântica de rede:** a fonte apresenta a categoria `Pública (Estadual e Municipal)` no dicionário, enquanto a tabela de metas utiliza o rótulo resumido `Pública`. O adaptador associa o rótulo resumido ao código 5 do dicionário. Essa equivalência deve ser considerada na interpretação dos resultados; ela não é uma correspondência literal do texto da fonte.
+- Rastrear dados e resultados por execução.
 
-O inventário produzido pela preparação fica em `data/exports_raw/source_inventory.json`.
+- Demonstrar uma integração técnica de eventos por SQS, Lambda e S3.
+
+A referência utilizada para classificar a criança alfabetizada é o corte de **743 pontos na escala de proficiência do Saeb**, conforme a Pesquisa Alfabetiza Brasil.
+
+O indicador agregado publicado e a taxa calculada a partir dos microdados são produtos diferentes e devem ser interpretados separadamente.
+
+### 2.1 Potencial de aplicação em inteligência artificial
+
+As tabelas Gold podem servir como base para estudos futuros de previsão de risco de não atingimento de metas, identificação de desigualdades regionais e análise de padrões de evolução dos indicadores. A versão atual **não treina nem publica um modelo de Machine Learning**. Para uma etapa futura, será necessário definir o horizonte de previsão, selecionar variáveis disponíveis antes do período previsto e evitar vazamento de alvo.
+
+**Fonte principal:** [Base dos Dados — Avaliação da Alfabetização](https://basedosdados.org/dataset/073a39d4-89cf-4068-b1e8-34ed0d9c0b72), dataset `br_inep_avaliacao_alfabetizacao`.
 
 ## 3. Arquitetura da solução
-
-A solução utiliza arquitetura medalhão na AWS, com ingestão batch e entrada de eventos simulados por fila.
+A arquitetura combina processamento batch, integração demonstrativa de eventos e orquestração automatizada.
 
 ```mermaid
-flowchart LR
-    SRC[CSVs oficiais] --> PREP[Preparação e validação]
-    DICT[Dicionário oficial] --> PREP
-    PREP --> BRONZE[(Amazon S3 - Bronze)]
 
-    EVT[Produtor de eventos simulados] --> SQS[Amazon SQS Standard]
-    SQS --> LAMBDA[AWS Lambda]
+flowchart TB
+
+    subgraph FONTES["FONTES DE DADOS"]
+
+        CSV["CSVs oficiais"]
+
+        DIC["Dicionário oficial"]
+
+        EVT["Eventos sintéticos"]
+
+    end
+
+    subgraph INGESTAO["PREPARAÇÃO E INGESTÃO"]
+
+        PREP["Preparação e validação"]
+
+        SQS["Amazon SQS Standard"]
+
+        LAMBDA["AWS Lambda"]
+
+    end
+
+    subgraph DATA_LAKE["AMAZON S3 — DATA LAKE"]
+
+        BRONZE[("BRONZE")]
+
+        SILVER[("SILVER")]
+
+        GOLD[("GOLD")]
+
+        OBS[("Observabilidade e métricas")]
+
+    end
+
+    subgraph PROCESSAMENTO["PROCESSAMENTO E ORQUESTRAÇÃO"]
+
+        SFN["AWS Step Functions"]
+
+        GLUE["AWS Glue 4.0 / PySpark"]
+
+        GATE{"Quality Gate"}
+
+        CRAWLERS["Glue Crawlers"]
+
+        CATALOG["Glue Data Catalog"]
+
+        REPAIR["Reparo de partições Athena"]
+
+        VALIDATE["Validação Athena"]
+
+        FINAL{"Gold Quality Gate"}
+
+    end
+
+    ATHENA["Amazon Athena"]
+
+    CW["Amazon CloudWatch"]
+
+    SNS["Amazon SNS"]
+
+    CSV --> PREP
+
+    DIC --> PREP
+
+    PREP --> BRONZE
+
+    EVT --> SQS
+
+    SQS --> LAMBDA
+
     LAMBDA --> BRONZE
 
-    BRONZE --> GLUE[AWS Glue / PySpark]
-    GLUE --> QA{Quality Gate}
-    QA -->|Aprovado| SILVER[(S3 - Silver)]
-    QA -->|Reprovado| QUAR[(Quarentena / observabilidade)]
-    SILVER --> GOLD[(S3 - Gold)]
+    LAMBDA --> CW
 
-    GOLD --> CRAWL[Glue Crawlers / Data Catalog]
-    CRAWL --> ATH[Athena]
+    SFN --> GLUE
 
-    SFN[AWS Step Functions] --> GLUE
-    SFN --> CRAWL
-    SFN --> ATH
-    CW[CloudWatch] <-->|logs e métricas| LAMBDA
+    BRONZE --> GLUE
+
+    GLUE --> GATE
+
+    GATE -->|Aprovado| SILVER
+
+    GATE -->|Reprovado| OBS
+
+    SILVER --> GOLD
+
     GLUE --> CW
-    CW --> SNS[Amazon SNS]
-    EB[EventBridge opcional] -. agendamento .-> SFN
+
+    GLUE --> OBS
+
+    SFN --> CRAWLERS
+
+    GOLD --> CRAWLERS
+
+    CRAWLERS --> CATALOG
+
+    SFN --> REPAIR
+
+    REPAIR --> ATHENA
+
+    SFN --> VALIDATE
+
+    CATALOG --> ATHENA
+
+    ATHENA --> FINAL
+
+    FINAL -->|PASS| SUCCESS["Execução concluída"]
+
+    FINAL -->|FAIL| OBS
+
+    CW --> SNS
+
 ```
 
-### Componentes AWS
-
-| Componente | Responsabilidade |
+### 3.1 Componentes AWS
+| Serviço | Responsabilidade |
 |---|---|
-| Amazon S3 | Data Lake com prefixos Bronze, Silver, Gold, streaming e observabilidade. |
-| Amazon SQS Standard | Fila de eventos de demonstração. |
-| AWS Lambda | Consome mensagens SQS, valida o timestamp, registra dados de ingestão e grava eventos JSONL na Bronze do S3. |
-| AWS Glue 4.0 / PySpark | Processa os CSVs canônicos, executa verificações e publica Silver/Gold em Parquet Snappy. |
-| AWS Step Functions | Orquestra Glue, crawlers Silver/Gold, reparo de partições e Quality Gate no Athena. |
-| AWS Glue Data Catalog | Catálogo das tabelas Silver e Gold. |
-| Glue Crawlers | Descobrem esquemas e partições nos prefixos do S3. |
-| Amazon Athena | Consulta os dados catalogados usando SQL. |
-| Amazon CloudWatch | Logs, métricas e alarme de erro da Lambda. |
-| Amazon SNS | Notificações associadas ao monitoramento. |
-| Terraform | Provisionamento repetível da infraestrutura. |
+| Amazon S3 | Data Lake e armazenamento das camadas Bronze, Silver e Gold, eventos e resultados de execução. |
+| Amazon SQS Standard | Fila de eventos sintéticos para demonstração. |
+| AWS Lambda | Consome mensagens SQS, valida eventos e grava registros JSONL na Bronze. |
+| AWS Glue 4.0 / PySpark | Executa transformações, verificações de qualidade e publicação Silver/Gold. |
+| AWS Step Functions | Orquestra o processamento Glue, crawlers, reparos de partições e validação final. |
+| AWS Glue Crawlers | Descobrem esquemas e partições nos prefixos Silver e Gold. |
+| AWS Glue Data Catalog | Mantém os metadados das tabelas analíticas. |
+| Amazon Athena | Executa consultas SQL e valida os resultados Gold. |
+| Amazon CloudWatch | Logs, métricas operacionais e alarmes. |
+| Amazon SNS | Distribui notificações de monitoramento. |
+| Terraform | Provisionamento e atualização da infraestrutura como código. |
 
-**Decisão de mensageria:** a implementação atual utiliza **SQS Standard**, não Kinesis Data Streams. A troca foi necessária porque a política organizacional da conta AWS não permitia criar recursos Kinesis. A arquitetura e os exemplos deste README refletem a implementação SQS efetivamente publicada.
+**Decisão de mensageria:** foi utilizado SQS Standard em vez de Kinesis Data Streams porque uma restrição organizacional (SCP) da conta AWS negava a operação necessária para Kinesis. O fluxo SQS → Lambda → S3 foi validado com eventos sintéticos. O acionamento automático da Lambda permanece desabilitado fora dos períodos de teste/demonstração, para evitar polling ocioso da fila; portanto, não descreva a solução como um serviço contínuo de atualização oficial em tempo real.
 
-### Princípios de execução e idempotência
+## 4. Organização das camadas Medallion
+### 4.1 Bronze — preservação dos dados
+A camada Bronze preserva os dados recebidos e a rastreabilidade da ingestão.
 
-- Cada execução recebe um `run_id` e grava resultados em caminhos versionados.
-- Os arquivos Bronze preservam o histórico dos dados recebidos.
-- Silver e Gold são gravadas por execução, sem sobrescrever diretamente resultados anteriores.
-- Eventos são identificados por `event_id` para permitir deduplicação no processamento analítico.
-- A mensageria SQS Standard deve ser considerada de entrega pelo menos uma vez; consumidores precisam tolerar mensagens repetidas.
-- Uma falha no quality gate impede a publicação das camadas seguintes e gera relatório de qualidade.
-- O versionamento S3 preserva versões anteriores; o ciclo de vida configurado expira versões não correntes após 90 dias.
+Principais grupos de dados:
 
-## 4. Camadas do Data Lake — Medallion
+- Arquivos brutos exportados da fonte.
 
-### Bronze — dados brutos e histórico
+- CSVs canônicos utilizados pelo processamento.
 
-A Bronze preserva os dados de entrada e a rastreabilidade da ingestão:
+- Dicionário oficial.
 
-- CSVs originais exportados da fonte, no prefixo `bronze/raw_exports/`.
-- CSVs canônicos utilizados pelo Glue, no prefixo `bronze/source/`.
-- Dicionário oficial usado para interpretar os códigos.
-- Eventos JSONL recebidos pelo consumidor Lambda, em `bronze/streaming/`.
-- Metadados de execução, como `run_id`, datas, quantidade de registros e informações de integridade quando aplicável.
+- Eventos JSONL recebidos via Lambda.
 
-### Silver — dados padronizados
+- Metadados de execução e informações de observabilidade.
 
-A Silver contém tabelas normalizadas e prontas para análise:
+Prefixos principais:
 
-- Chaves municipais normalizadas para string de sete dígitos.
-- Tipos numéricos, percentuais e categorias padronizados.
-- Códigos originais preservados e descrições categóricas acrescentadas quando compatíveis com o dicionário.
-- Valores nulos relevantes preservados; ausência de dado não é convertida em zero.
-- Indicador calculado a partir dos microdados, considerando alunos presentes e pesos amostrais válidos.
-- Eventos inválidos separados para quarentena; duplicatas podem ser removidas pela chave de evento no fluxo analítico.
+```text
 
-Na execução AWS registrada, o Glue Catalog apresentou as seguintes tabelas Silver:
+bronze/
 
-- `alunos`
-- `dicionario`
-- `indicador_calculado_microdados`
-- `meta_alfabetizacao_brasil`
-- `meta_alfabetizacao_municipio`
-- `meta_alfabetizacao_uf`
-- `municipio`
-- `uf`
+├── raw_exports/
 
-### Gold — produtos analíticos
+├── source/
 
-| Tabela | Conteúdo |
+└── streaming/
+
+```
+
+### 4.2 Silver — padronização e qualidade
+A camada Silver contém os dados tratados pelo Glue:
+
+- Chaves municipais normalizadas.
+
+- Tipos numéricos e categorias padronizados.
+
+- Códigos originais preservados.
+
+- Descrições categóricas acrescentadas quando compatíveis com o dicionário.
+
+- Valores nulos relevantes preservados.
+
+- Indicadores calculados a partir dos microdados.
+
+- Eventos inválidos separados para quarentena.
+
+Tabelas Silver:
+
+1. `alunos`
+
+2. `dicionario`
+
+3. `indicador_calculado_microdados`
+
+4. `meta_alfabetizacao_brasil`
+
+5. `meta_alfabetizacao_municipio`
+
+6. `meta_alfabetizacao_uf`
+
+7. `municipio`
+
+8. `uf`
+
+### 4.3 Gold — produtos analíticos
+A camada Gold contém oito produtos verificados pela execução final:
+| Tabela | Finalidade |
 |---|---|
-| `fato_alfabetizacao_municipio` | Resultado municipal publicado, metas disponíveis, distância em pontos percentuais e classificação do recorte. |
-| `mart_alfabetizacao_uf` | Resultado por UF e comparação com metas estadual/nacional. |
-| `mart_evolucao_temporal` | Evolução anual. A média simples municipal é descritiva, não oficial e não ponderada. |
-| `reconciliacao_microdados` | Comparação exploratória entre taxa ponderada calculada dos microdados e taxa agregada publicada. |
-| `mart_streaming_eventos` | Tabela de eventos simulados válidos. Não foi produzida na execução histórica de 29/10; a validação integrada de 02/11 encontrou uma linha sintética para o `run_id` testado. Não representa indicador oficial. |
+| `fato_alfabetizacao_municipio` | Resultados municipais e comparação com metas disponíveis. |
+| `mart_alfabetizacao_uf` | Indicadores e comparações por unidade federativa. |
+| `mart_evolucao_temporal` | Evolução anual dos indicadores. |
+| `mart_acompanhamento_metas` | Acompanhamento de resultados em relação às metas. |
+| `mart_streaming_eventos` | Eventos sintéticos processados para análise. |
+| `reconciliacao_microdados` | Comparação exploratória entre os microdados e o indicador publicado. |
+| `mart_trajetoria_metas` | Trajetória dos resultados e das metas. |
+| `mart_perfil_proficiencia` | Perfil dos registros por categorias de proficiência. |
 
-Os status de comparação com metas devem ser interpretados com cuidado:
+As saídas Silver e Gold são armazenadas em Parquet com compressão Snappy e particionadas por `run_id`.
 
-- `ATINGIDA`: resultado atingiu ou superou a meta aplicável.
-- `ABAIXO_DA_META`: resultado ficou abaixo da meta aplicável.
-- `SEM_META`: não há valor de meta disponível para aquela combinação.
-- `SEM_RESULTADO`: não há resultado para o recorte.
-- `NAO_COMPARAVEL`: a categoria de rede não corresponde ao recorte definido pela meta.
+Exemplo conceitual:
 
-A ausência de uma meta **não significa descumprimento**. A meta pactuada pela fonte e a aspiração de universalização da alfabetização são conceitos diferentes e não devem ser misturados.
+```text
 
-### Particionamento, formatos e Glue Data Catalog
+silver/
 
-As saídas AWS Silver/Gold são gravadas em Parquet com compressão Snappy e particionadas por execução (`run_id`). Ao consultar no Athena, filtre o `run_id` desejado para não combinar registros de execuções diferentes.
+  tabela/
 
-Os Crawlers recebem como alvo as raízes `silver/` e `gold/`. O Terraform define `Grouping.TableLevelConfiguration = 2`: o primeiro nível abaixo do bucket identifica a camada e o segundo identifica a tabela; as pastas `run_id=...` do terceiro nível são partições. Essa configuração evita catalogar diretórios de execução como tabelas independentes. A configuração foi aplicada aos dois Crawlers em 03/11/2026, e os rastreamentos Silver e Gold terminaram com `SUCCEEDED`. Após a limpeza seletiva dos metadados redundantes, o Glue Data Catalog ficou com 16 tabelas principais (8 Silver e 8 Gold), sem tabelas extras `run_id_*`. A operação removeu somente definições do catálogo; os objetos Parquet no S3 foram preservados. O procedimento e os critérios de identificação estão registrados em [`docs/glue_catalog.md`](docs/glue_catalog.md).
+    run_id=\<identificador>/
 
-## 5. Qualidade de dados e observabilidade
+gold/
 
-O quality gate controla a publicação das camadas seguintes. O limite mínimo de correspondência de joins é configurável por `min_join_match_rate` no Terraform, com padrão de 95%. A taxa máxima de pesos amostrais ausentes ou não positivos entre alunos elegíveis é configurável por `max_invalid_weight_rate`, com padrão de 0,1%.
+  tabela/
 
-Entre as verificações implementadas estão:
+    run_id=\<identificador>/
 
-- Presença das seis tabelas obrigatórias e das colunas necessárias.
-- Verificação de chaves nulas e duplicidade de chaves naturais.
-- Validação de percentuais e metas no intervalo de 0 a 100.
-- Verificação de presença e situação de alfabetização para alunos considerados no cálculo.
-- Validação dos pesos amostrais; registros inelegíveis não recebem peso zero para forçar sua inclusão.
-- Taxas de correspondência nos joins `alunos → municipio`, `municipio → uf` e joins de metas.
-- Separação de redes comparáveis e não comparáveis às metas.
-- Validação de eventos, timestamps, duplicidade e quarentena.
-- Persistência de relatórios de qualidade e métricas de execução.
-
-Arquivos e destinos de observabilidade:
-
-- Local: `data/observability/quality_<run_id>.json`, histórico de qualidade e métricas da execução.
-- AWS: `s3://<bucket>/observability/quality/` e logs/métricas no CloudWatch.
-- Streaming: namespace CloudWatch `AlfabetizacaoPipeline`, com métricas `EventsIngested`, `InvalidEvents` e `EventLatencySeconds`.
-
-Para diagnóstico e recuperação, consulte [`docs/runbook.md`](docs/runbook.md).
-
-## 6. Como executar localmente
-
-### Pré-requisitos
-
-- Python 3.11 a 3.13. A versão validada em clone limpo foi Python 3.13.14. Python 3.14 não foi validado com as dependências fixadas.
-- Git.
-- Acesso aos arquivos exportados da Base dos Dados.
-- PowerShell no Windows ou terminal Bash no Linux/macOS.
-
-O modo local não precisa de conta AWS.
-
-### Windows / VS Code / PowerShell
-
-Clone o repositório e entre na pasta:
-
-```powershell
-git clone https://github.com/Eric-Schwinn-Lima/Tech-Challenge-Pipeline-Fase-2.git
-cd Tech-Challenge-Pipeline-Fase-2
 ```
 
-Crie e ative o ambiente virtual:
+O filtro por `run_id` é necessário para consultar somente os registros da execução desejada.
 
-```powershell
-py -3.13 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e ".[test]"
+**Catálogo atualizado em 03/11/2026:** 16 tabelas principais (oito Silver e oito Gold). A configuração dos Crawlers usa `Grouping.TableLevelConfiguration = 2`, tratando `run_id=...` como partição, não como tabela. Foram removidas 24 definições antigas `run_id_*` exclusivamente do Glue Data Catalog; nenhum objeto Parquet no S3 foi excluído.
+
+## 5. Orquestração automatizada
+A máquina de estados utilizada é:
+
+`tc-alfabetizacao-a9455abd-pipeline-orchestrator`
+
+A orquestração foi ampliada para executar o fluxo completo, não apenas o job Glue.
+
+### 5.1 Fluxo de execução
+1. **GenerateRunId:** gera um identificador único para a execução.
+
+2. **RunMedallionGlueJob:** inicia o Glue e transmite o identificador por `--RUN_ID`.
+
+3. **StartSilverCrawler:** inicia o crawler Silver.
+
+4. **WaitSilverCrawler / GetSilverCrawler:** acompanha a execução até a conclusão.
+
+5. **StartGoldCrawler:** inicia o crawler Gold.
+
+6. **WaitGoldCrawler / GetGoldCrawler:** acompanha a execução até a conclusão.
+
+7. **RepairFactMunicipalPartitions:** executa `MSCK REPAIR TABLE fato_alfabetizacao_municipio`.
+
+8. **RepairUfMartPartitions:** executa `MSCK REPAIR TABLE mart_alfabetizacao_uf`.
+
+9. **ValidateGoldAthena:** executa a consulta de qualidade sobre as oito tabelas Gold.
+
+10. **GetGoldValidationResults:** lê o resultado da consulta Athena.
+
+11. **GoldQualityGate:** verifica se o resultado é `PASS`.
+
+12. **PipelineSucceeded / PipelineFailed:** encerra a execução conforme o resultado.
+
+Os estados de espera consultam o Glue Data Catalog até que os crawlers estejam prontos e o último processamento esteja concluído.
+
+### 5.2 Propagação do identificador
+O identificador é gerado pela Step Functions e transmitido ao Glue.
+
+Exemplo da execução final:
+
+```text
+
+run_id:
+
+d5095134-779d-453d-b55a-c67a020ca4f3
+
 ```
 
-Se o PowerShell bloquear a ativação do ambiente virtual, execute apenas na sessão atual:
+O argumento recebido pelo Glue foi:
 
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\.venv\Scripts\Activate.ps1
+```text
+
+--RUN_ID=d5095134-779d-453d-b55a-c67a020ca4f3
+
 ```
 
-Baixe o ZIP das seis tabelas oficiais e salve-o em `data/exports_raw/dados_oficiais_base_dados.zip`. Em seguida, execute:
+O uso do mesmo identificador permite rastrear os dados produzidos, os resultados analíticos e as métricas da execução.
 
-```powershell
-python scripts/prepare_real_data.py
-python scripts/validate_sources.py
-python -m pytest -q
-python scripts/run_local.py
+### 5.3 Quality Gate final no Athena
+A consulta valida a existência das oito tabelas e exige registros positivos nas sete tabelas batch obrigatórias. A tabela de streaming é obrigatória para a verificação estrutural, mas pode conter zero ou mais registros.
+
+A execução final retornou:
+
+```text
+
+quality_status = PASS
+
+tables_checked = 8
+
+total_rows = 187200
+
+streaming_rows = 1
+
 ```
 
-### Linux / macOS
+O caminho correto para recuperar o identificador da consulta na resposta da integração Athena é:
 
-```bash
-git clone https://github.com/Eric-Schwinn-Lima/Tech-Challenge-Pipeline-Fase-2.git
-cd Tech-Challenge-Pipeline-Fase-2
-python3.13 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e '.[test]'
+```text
+
+$.gold_validation.QueryExecution.QueryExecutionId
+
 ```
 
-Depois de obter e colocar o ZIP em `data/exports_raw/dados_oficiais_base_dados.zip`:
+Esse caminho foi corrigido após o primeiro teste de ponta a ponta identificar um erro de referência JSONPath. A definição corrigida foi validada pela API da AWS e aplicada pelo Terraform.
 
-```bash
-python scripts/prepare_real_data.py
-python scripts/validate_sources.py
-python -m pytest -q
-python scripts/run_local.py
-```
-
-### Saídas locais
-
-Após a execução, confira:
-
-- `data/bronze/`
-- `data/silver/`
-- `data/gold/`
-- `data/observability/run_summary_<run_id>.json`
-- `data/observability/run_metrics.jsonl`
-- `data/observability/quality_<run_id>.json`
-
-Com as dependências do `pyproject.toml`, a saída local preferencial é Parquet Snappy. Se PyArrow não estiver disponível, a pipeline local utiliza um fallback explicitamente identificado como `.csv.gz`; esse fallback não deve ser confundido com arquivos Parquet.
-
-## 7. Testes automatizados
-
-Os testes usam fixtures pequenas e verificam transformações, regras de qualidade e execução ponta a ponta sem exigir os arquivos oficiais completos.
-
-Com o ambiente virtual ativado:
-
-```powershell
-python -m pytest -q
-```
-
-**Resultado mais recente:** `12 passed` (duas `FutureWarning` foram observadas, sem falha nos testes). Os testes utilizam fixtures pequenas e não exigem os CSVs oficiais completos.
-
-Também foram executadas verificações de compilação Python e validação do Terraform:
-
-```powershell
-python -m compileall -q src scripts jobs
-terraform -chdir=cloud/terraform fmt -check -recursive
-terraform -chdir=cloud/terraform validate
-```
-
-Resultado registrado: compilação sem erros e configuração Terraform válida.
-
-## 8. Implantação na AWS
-
-> **Atenção a custos:** a implantação cria recursos AWS que podem gerar cobrança. Configure o orçamento e o monitoramento antes de provisionar a infraestrutura. Mantenha o agendamento automático desligado até validar as execuções manuais.
-
-A implantação utilizada neste projeto foi realizada na região **`us-east-2`**. A infraestrutura é gerenciada por Terraform no diretório `cloud/terraform`.
-
-O passo a passo completo está em [`docs/deploy_aws.md`](docs/deploy_aws.md). A sequência resumida é:
-
-### 8.1. Validar credenciais e região
-
-Configure o acesso AWS por um mecanismo seguro, preferencialmente IAM Identity Center/SSO ou o mecanismo de autenticação já adotado no ambiente. Não coloque Access Keys diretamente em scripts nem versione credenciais.
-
-No PowerShell, defina o perfil que será usado:
-
-```powershell
-$env:AWS_PROFILE = "SEU_PERFIL_AWS"
-aws sts get-caller-identity --profile $env:AWS_PROFILE
-```
-
-Confirme que a conta e a região são as esperadas antes de provisionar.
-
-### 8.2. Provisionar a infraestrutura
-
-```powershell
-terraform -chdir=cloud/terraform init
-terraform -chdir=cloud/terraform fmt -recursive
-terraform -chdir=cloud/terraform validate
-terraform -chdir=cloud/terraform plan -out=tfplan
-terraform -chdir=cloud/terraform apply tfplan
-```
-
-Revise cuidadosamente o plano antes do `apply`. O Terraform cria, entre outros recursos, bucket S3, fila SQS, Lambda, roles/policies IAM, job Glue, Step Functions, crawlers, Data Catalog, workgroup Athena, alarme CloudWatch e tópico SNS.
-
-A variável `enable_daily_schedule` deve permanecer `false` até que a execução manual seja validada. Caso utilize notificação SNS por e-mail, configure o destino em um arquivo local `terraform.tfvars` não versionado e confirme a assinatura recebida.
-
-### 8.3. Obter os nomes dos recursos
-
-```powershell
-$bucket = terraform -chdir=cloud/terraform output -raw s3_bucket_name
-$queueUrl = terraform -chdir=cloud/terraform output -raw sqs_queue_url
-$stateMachine = terraform -chdir=cloud/terraform output -raw state_machine_arn
-$glueJob = terraform -chdir=cloud/terraform output -raw glue_job_name
-```
-
-### 8.4. Preparar e carregar as fontes
-
-Prepare os CSVs canônicos localmente:
-
-```powershell
-python scripts/prepare_real_data.py
-python scripts/validate_sources.py
-```
-
-Carregue as sete tabelas (seis fontes e o dicionário) para a Bronze:
-
-```powershell
-aws s3 sync data/source/ "s3://$bucket/bronze/source/" --exclude "*" --include "*.csv" --region us-east-2 --profile $env:AWS_PROFILE
-aws s3 ls "s3://$bucket/bronze/source/" --recursive --region us-east-2 --profile $env:AWS_PROFILE
-```
-
-O job Glue espera os arquivos `uf.csv`, `municipio.csv`, `meta_alfabetizacao_brasil.csv`, `meta_alfabetizacao_uf.csv`, `meta_alfabetizacao_municipio.csv`, `alunos.csv` e `dicionario.csv` no prefixo `bronze/source/`.
-
-### 8.5. Testar o fluxo SQS → Lambda → S3
-
-Os eventos do repositório são simulados. Para enviar uma amostra à fila:
-
-```powershell
-python scripts/send_sqs_events.py --queue-url $queueUrl --region us-east-2 --profile $env:AWS_PROFILE
-```
-
-Confira os objetos recebidos:
-
-```powershell
-aws s3 ls "s3://$bucket/bronze/streaming/" --recursive --region us-east-2 --profile $env:AWS_PROFILE
-```
-
-As métricas customizadas são publicadas no namespace `AlfabetizacaoPipeline`: `EventsIngested`, `InvalidEvents` e `EventLatencySeconds`.
-
-### 8.6. Executar a pipeline
-
-Dispare a máquina Step Functions:
-
-```powershell
-$executionArn = aws stepfunctions start-execution `
-    --state-machine-arn $stateMachine `
-    --query executionArn --output text `
-    --region us-east-2 --profile $env:AWS_PROFILE
-
-Write-Host "Execution ARN: $executionArn"
-```
-
-Acompanhe até a execução sair de `RUNNING`:
-
-```powershell
-do {
-    Start-Sleep -Seconds 10
-    $status = aws stepfunctions describe-execution `
-        --execution-arn $executionArn `
-        --query status --output text `
-        --region us-east-2 --profile $env:AWS_PROFILE
-    Write-Host "Status: $status"
-} while ($status -eq "RUNNING")
-
-aws stepfunctions describe-execution `
-    --execution-arn $executionArn `
-    --region us-east-2 --profile $env:AWS_PROFILE
-```
-
-Quando a execução terminar com `SUCCEEDED`, o fluxo integrado terá concluído, em sequência, o job Glue, os crawlers Silver e Gold, os dois reparos de partições no Athena (`MSCK REPAIR TABLE`) e a consulta de validação das oito tabelas Gold. O Quality Gate encerra a máquina com sucesso somente quando o resultado da validação é `PASS`.
-
-**Não inicie os crawlers manualmente após uma execução bem-sucedida dessa máquina:** eles já fazem parte da orquestração. Em caso de falha, consulte o histórico da Step Functions, os logs do Glue, o estado dos crawlers e o resultado/erro da consulta Athena.
-
-### 8.7. Consultar os resultados no Athena
-
-Após a Step Functions terminar com `SUCCEEDED`, consulte as tabelas no Athena usando o Glue Data Catalog Database e o workgroup criados pelo Terraform. A execução gera o `run_id`; use o identificador apresentado nos detalhes da execução, nos argumentos do Glue ou nos prefixos de saída no S3 para filtrar os resultados.
-
-Exemplo com a execução aprovada de 02/11/2026:
-
-```sql
-SELECT
-    ano,
-    sigla_uf,
-    id_municipio,
-    taxa_alfabetizacao,
-    meta_municipio,
-    gap_meta_municipio_pp,
-    status_meta_municipio
-FROM fato_alfabetizacao_municipio
-WHERE run_id = 'd5095134-779d-453d-b55a-c67a020ca4f3'
-ORDER BY ano, sigla_uf, id_municipio
-LIMIT 100;
-```
-
-Contagem por execução:
-
-```sql
-SELECT run_id, COUNT(*) AS total_registros
-FROM fato_alfabetizacao_municipio
-GROUP BY run_id
-ORDER BY run_id;
-```
-
-A consulta automática de qualidade valida oito tabelas Gold. Na execução integrada de referência de 02/11/2026, o resultado foi `PASS`, com 187.200 registros somados e um evento simulado na tabela `mart_streaming_eventos`. Esse total é a soma verificada pelo Quality Gate entre oito tabelas Gold naquela execução; não deve ser confundido com a contagem histórica de 191.960 linhas da tabela `fato_alfabetizacao_municipio` em oito partições `run_id`, validada em 03/11/2026. O evento operacional não representa uma taxa oficial de alfabetização. Evite consultas extensas sem filtros e registre os bytes escaneados para FinOps.
-
-### 8.8. Limpeza dos recursos
-
-Depois de guardar as evidências exigidas, pare execuções e remova os recursos para evitar cobranças contínuas. O bucket utiliza versionamento; apagar apenas a versão atual dos objetos não remove necessariamente as versões anteriores.
-
-O script `scripts/purge_versioned_bucket.py` é destrutivo. Execute-o **somente** após confirmar que `$bucket` é o bucket exclusivo deste projeto:
-
-```powershell
-python scripts/purge_versioned_bucket.py --bucket $bucket --region us-east-2 --confirm
-terraform -chdir=cloud/terraform destroy
-```
-
-Revise o plano de destruição e confirme no console AWS que os recursos foram removidos. Depois, acompanhe Cost Explorer/Billing para verificar eventuais cobranças residuais.
-
-## 9. Resultados de execução registrados
-
-Os resultados abaixo são evidências de execuções específicas e não uma garantia de que uma nova execução terá exatamente os mesmos números. A execução AWS histórica de 29/10 está descrita na seção 9.2. A execução integrada mais recente, concluída em 02/11/2026, está documentada na seção 9.4.
-
-### 9.1. Execução local
-
-| Métrica | Resultado registrado |
-|---|---:|
-| Run ID | `20261029T003707Z_763b68ad` |
-| Duração | 30,811 segundos |
-| Verificações de qualidade | 61 |
-| Falhas bloqueantes | 0 |
-| Testes automatizados | 8 aprovados |
-| Linhas de `alunos` | 1.048.575 |
-| Linhas do dicionário | 27 |
-| Linhas produzidas nas tabelas Gold locais | 36.542 |
-
-A execução local foi registrada após a integração do dicionário oficial. O relatório e os arquivos de evidência estão documentados em [`docs/evidencias_execucao_local.md`](docs/evidencias_execucao_local.md) e no diretório `docs/evidencias/`.
-
-### 9.2. Execução AWS Glue
-
-| Campo | Resultado |
-|---|---|
-| Região | `us-east-2` |
-| Run ID | `20261029T231856Z_37704ef5` |
-| Status do Glue | `SUCCESS` |
-| Status do relatório de qualidade | `PASSED` |
-| Duração | Aproximadamente 227,87 segundos |
-| Glue version | `4.0` |
-| Worker type | `G.1X` |
-| Número de workers | `2` |
-| Formato Silver/Gold | Parquet + Snappy |
-
-#### Volumes de entrada
-
-| Entidade | Registros |
-|---|---:|
-| UF | 145 |
-| Município | 23.995 |
-| Metas nacionais | 7 |
-| Metas estaduais | 189 |
-| Metas municipais | 37.464 |
-| Alunos | 1.048.575 |
-| Dicionário | 27 |
-
-#### Produtos Gold publicados na execução AWS
-
-| Tabela | Registros |
-|---|---:|
-| `fato_alfabetizacao_municipio` | 23.995 |
-| `mart_alfabetizacao_uf` | 145 |
-| `mart_evolucao_temporal` | 7 |
-| `reconciliacao_microdados` | 12.393 |
-
-As taxas de correspondência registradas foram de aproximadamente **99,82%** para alunos → município e **98,64%** para município → UF.
-
-A consulta Athena filtrada pelo `run_id` retornou 23.995 registros na fato municipal. Na validação documentada, a fato apresentou 5.550 municípios distintos e nenhuma taxa municipal nula. Os status registrados foram:
-
-| Status | Registros |
-|---|---:|
-| `ATINGIDA` | 2.788 |
-| `ABAIXO_DA_META` | 2.444 |
-| `SEM_META` | 5.664 |
-| `NAO_COMPARAVEL` | 13.099 |
-
-Os 18.763 registros sem meta preenchida incluem situações de ausência de cobertura/valor de meta e recortes não comparáveis. Não devem ser interpretados como metas descumpridas.
-
-#### Catálogo e orquestração
-
-- Crawler Silver: `SUCCEEDED`.
-- Crawler Gold: `SUCCEEDED`.
-- Glue Data Catalog: 12 tabelas (8 Silver e 4 Gold).
-- Athena: consulta de contagem da fato municipal retornou 23.995 linhas para o `run_id` documentado.
-- Step Functions: uma execução de validação da máquina de estados terminou com `SUCCEEDED`.
-
-Na execução histórica de 29/10/2026, a máquina Step Functions orquestrava somente o job Glue. Os crawlers e as consultas Athena eram executados separadamente após o processamento. Esse fluxo foi ampliado na implementação integrada documentada na seção 9.4.
-
-#### Streaming de teste
-
-O caminho **SQS → Lambda → S3** foi validado com eventos simulados. Um evento JSON aceito pelo consumidor Lambda foi gravado na Bronze do S3, com latência observada de aproximadamente **2,18 segundos**.
-
-Os eventos utilizados no teste não continham todos os campos analíticos necessários para a tabela Gold de streaming. Por isso, os eventos incompatíveis foram enviados para quarentena, e a execução AWS documentada não produziu a tabela `mart_streaming_eventos`. Essa evidência demonstra a ingestão técnica até a Bronze, não a produção de indicadores oficiais por streaming.
-
-
-### 9.3. Modelos Gold acrescentados no código atual
-
-A branch de evolução da Gold acrescenta três marts analíticas e amplia a evolução temporal e a reconciliação:
-
-| Tabela | Conteúdo |
-|---|---|
-| \`mart_perfil_proficiencia\` | Distribuição longa dos percentuais dos níveis de desempenho 0–8, com média de Português e taxa publicada como contexto. |
-| \`mart_acompanhamento_metas\` | Contagens por status, cobertura de metas, percentual de atingimento entre registros que têm meta e resultado, mediana e pior gap. |
-| \`mart_trajetoria_metas\` | Metas de Brasil, UF e município de 2024 a 2030, com ano do snapshot e variação anual da meta. |
-
-A \`mart_evolucao_temporal\` mantém a média simples municipal não oficial e acrescenta a variação anual em municípios pareados (mesma série e rede, anos consecutivos), incluindo contagens de melhoria, piora e estabilidade. A reconciliação explicita se existe registro publicado e se há taxa publicada disponível. A fato municipal e a mart de UF também passam a expor gap e status frente à meta nacional, respeitando o código de rede coberto pela meta Brasil.
-
-**Importante:** os números da seção 9.2 continuam sendo evidência histórica da execução AWS de 29/10/2026, que publicou quatro tabelas Gold. As novas marts e a tabela de streaming foram materializadas e verificadas na execução integrada de 02/11/2026, descrita na seção 9.4. A soma dos níveis de proficiência é apenas diagnóstica; a taxa oficial de alfabetização não é reconstruída pela soma dos níveis.
-
-### 9.4. Execução AWS integrada — 02/11/2026
-
+## 6. Evidência da execução final na AWS
+### 6.1 Identificação
 | Campo | Resultado |
 |---|---|
 | Data | 02/11/2026 |
 | Região | `us-east-2` |
-| Step Functions | `SUCCEEDED` |
-| Duração total | Aproximadamente 11 min 10 s |
-| `run_id` | `d5095134-779d-453d-b55a-c67a020ca4f3` |
+| Run ID | `d5095134-779d-453d-b55a-c67a020ca4f3` |
+| Glue Job | `tc-alfabetizacao-a9455abd-medallion-pipeline` |
 | Glue Job Run ID | `jr_72e1d75c775ccf77fc2675b98ffc00f12b5c3652f41068de5119dbe88e444fd7` |
-| Glue | `SUCCEEDED`, 371 s, 742 DPU-segundos |
-| Crawler Silver / Gold | `SUCCEEDED` / `SUCCEEDED` |
-| Athena — reparos | Duas consultas `MSCK REPAIR TABLE`, ambas `SUCCEEDED` |
-| Athena — Quality Gate | `PASS`; oito tabelas verificadas; 187.200 registros no total |
-| Streaming | Um evento simulado validado em `mart_streaming_eventos` |
+| Step Functions | `SUCCEEDED` |
+| Início | 17:03:53 (horário de Brasília) |
+| Encerramento | 17:15:03 (horário de Brasília) |
+| Duração total | Aproximadamente 11 min 10 s |
 
-A execução da máquina de estados foi iniciada às 17:03:53 (UTC−03) e terminou às 17:15:03 (UTC−03). A consulta de validação Athena usou o Query Execution ID `94a4e66c-83d8-459a-baef-41777bfd36ce`. Os reparos de partição tiveram os IDs `400eb989-9ddf-4844-9e3c-a73272249ac1` (`fato_alfabetizacao_municipio`) e `cf993e91-5c07-4eaa-90d6-da0ab3eada84` (`mart_alfabetizacao_uf`).
-
-As oito tabelas Gold verificadas foram `fato_alfabetizacao_municipio`, `mart_alfabetizacao_uf`, `mart_evolucao_temporal`, `reconciliacao_microdados`, `mart_perfil_proficiencia`, `mart_acompanhamento_metas`, `mart_trajetoria_metas` e `mart_streaming_eventos`. O total de 187.200 é o total consolidado da consulta de qualidade; não se apresenta aqui uma distribuição por tabela específica dessa execução. O evento de streaming é simulado e operacional, não um indicador oficial de alfabetização.
-
-Na primeira tentativa integrada, o Glue concluiu com sucesso e a consulta Athena retornou `PASS`, mas a Step Functions falhou ao ler o resultado por um JSONPath incorreto (`$.gold_validation.QueryExecutionId`). O caminho foi corrigido para `$.gold_validation.QueryExecution.QueryExecutionId`. A execução descrita nesta seção é a repetição posterior, concluída com `SUCCEEDED`.
-
-## 9.5. Glue Data Catalog e snapshots históricos — validação de 03/11/2026
-
-Após a execução integrada descrita na seção 9.4, foi corrigida a profundidade de descoberta dos Crawlers para impedir que diretórios de execução fossem catalogados como tabelas. A configuração Terraform `Grouping.TableLevelConfiguration = 2` foi aplicada aos Crawlers Silver e Gold; os dois rastreamentos manuais de validação terminaram com `SUCCEEDED`.
-
-| Verificação | Resultado |
+### 6.2 Glue
+| Indicador | Resultado |
 |---|---:|
-| Tabelas principais no Glue Data Catalog | 16 (8 Silver e 8 Gold) |
-| Definições extras `run_id_*` removidas do catálogo | 24 |
-| Definições `run_id_*` restantes após a limpeza | 0 |
-| Tabelas retornadas por `SHOW TABLES` no Athena | 16 |
-| Partições `run_id` em `fato_alfabetizacao_municipio` | 8 |
-| Registros por partição da fato municipal | 23.995 |
-| `COUNT(*)` da fato municipal, somando as oito partições | 191.960 |
+| Status | `SUCCEEDED` |
+| Glue Version | 4.0 |
+| Worker Type | G.1X |
+| Workers | 2 |
+| Tempo de execução | 371 segundos |
+| DPUSeconds | 742 |
+| Erro | Nenhum |
 
-A exclusão utilizou `aws glue delete-table` somente para as 24 definições que atendiam aos critérios documentados em [`docs/glue_catalog.md`](docs/glue_catalog.md): nome `run_id_*`, ausência de chaves de partição e localização diretamente em uma pasta `run_id=...` dentro dos prefixos Silver ou Gold. Nenhum objeto Parquet do S3 foi excluído nessa limpeza.
+### 6.3 Crawlers e partições
+| Etapa | Resultado |
+|---|---|
+| Crawler Silver | `SUCCEEDED` |
+| Crawler Gold | `SUCCEEDED` |
+| Reparo da fato municipal | `SUCCEEDED` |
+| Reparo da mart por UF | `SUCCEEDED` |
 
-A partição com maior `CreationTime` registrado pelo Glue foi `feb4e177-4ea5-4456-bb6d-2fd0832b1507`, criada em 02/11/2026 às 20:56:52 (UTC−03). Uma consulta Athena filtrada por esse `run_id` retornou 23.995 registros. As oito partições da fato municipal continham 23.995 registros cada; portanto, 191.960 é o volume de linhas acumuladas entre snapshots, não a quantidade de municípios únicos nem o volume de uma única execução.
-
-Os oito `run_id` encontrados foram `feb4e177-4ea5-4456-bb6d-2fd0832b1507`, `d5095134-779d-453d-b55a-c67a020ca4f3`, `117b9877-6796-4039-b56e-6ab35e6974f0`, `20261101T190118Z_4127a8f9`, `20261101T135015Z_198b7bef`, `20261031T150855Z_c4172cdb`, `20261029T231856Z_37704ef5` e `20261029T042713Z_e7985d98`.
-
-## 10. Limitações conhecidas e interpretação dos resultados
-
-### Completude dos microdados
-
-O arquivo `alunos.csv` contém exatamente **1.048.575 registros de dados**. Somando a linha de cabeçalho, o total coincide com o limite de 1.048.576 linhas de uma planilha Excel. Isso é um alerta de possível truncamento, mas **não prova** que houve truncamento. A completude deve ser confirmada comparando a quantidade com a fonte original ou com a consulta oficial antes de tratar a reconciliação dos microdados como conclusiva.
-
-### Cobertura das metas municipais
-
-A validação no Glue e no Athena identificou as seguintes situações:
-
-- A tabela de metas municipais disponível contém dados a partir de 2024; portanto, os registros de 2023 não podem ser comparados com uma meta municipal dessa tabela.
-- Para 2024, 96 registros da fato municipal não possuem linha correspondente na tabela de metas para a combinação de ano, município, série e rede.
-- Outras 120 linhas de meta de 2024 possuem `meta_alfabetizacao` vazio também no arquivo original exportado. A comparação realizada não indicou perda desses valores durante a preparação.
-
-Os valores ausentes são preservados como nulos. Não são substituídos por zero nem interpretados como sucesso ou fracasso. O status `PASSED` confirma que as verificações implementadas foram aprovadas; não comprova a completude integral das fontes nem elimina as lacunas descritas.
-
-### Streaming
-
-Os eventos são artificiais e devem permanecer identificados como simulados. A ingestão SQS/Lambda/S3 foi validada, mas os eventos de teste usados na execução documentada não possuíam todos os atributos analíticos exigidos para gerar `mart_streaming_eventos`. Portanto, não se deve apresentar essa tabela como produto efetivamente criado nessa execução AWS.
-
-### Indicador temporal
-
-A média simples municipal usada em `mart_evolucao_temporal` é uma métrica descritiva não ponderada. Ela não substitui o indicador nacional oficial nem deve ser interpretada como uma taxa nacional ponderada.
-
-## 11. Monitoramento, FinOps e custos
-
-### Monitoramento
-
-### Retenção e validação dos logs no CloudWatch
-
-A retenção dos logs da aplicação foi configurada e gerenciada pelo Terraform, com prazo de 30 dias.
-
-| Grupo de logs | Finalidade | Retenção |
-|---|---|---:|
-| `/aws/lambda/tc-alfabetizacao-a9455abd-stream-consumer` | Logs da Lambda Stream Consumer | 30 dias |
-| `/aws-glue/jobs/logs-v2/tc-alfabetizacao-a9455abd` | Logs contínuos do Glue ETL | 30 dias |
-
-Os dois recursos utilizam `skip_destroy = true`, evitando que o Terraform exclua os grupos de logs durante uma operação de destruição dos recursos gerenciados. Essa configuração não impede a expiração automática dos eventos após o prazo de retenção.
-
-No AWS Glue, foram habilitados os seguintes argumentos:
-
-- `--enable-continuous-cloudwatch-log = true`
-- `--continuous-log-logGroup = /aws-glue/jobs/logs-v2/tc-alfabetizacao-a9455abd`
-
-**Validação realizada em 02/11/2026:**
-
-- Step Functions: execução `validacao-cloudwatch-20261102-204946`.
-- Resultado: `SUCCEEDED`.
-- Grupo de logs: `/aws-glue/jobs/logs-v2/tc-alfabetizacao-a9455abd`.
-- Fluxo criado: `jr_16518f4f47e0e9ae0b60e1a199f8a5fe362d3671325c8fa60e8c3d9abf689cd8-1`.
-- Consulta `get-log-events` retornou mensagens reais do `GlueCloudwatchSink`.
-- Foi confirmada a obtenção de credenciais pelo Instance Profile e a identificação do Glue Job e de seu Job Run ID.
-
-A validação demonstrou o funcionamento do envio de logs contínuos para o grupo exclusivo do projeto.
-
-Os grupos compartilhados `/aws-glue/jobs/error`, `/aws-glue/jobs/output`, `/aws-glue/jobs/logs-v2` e `/aws-glue/crawlers` não foram modificados por essa implementação.
-### Orçamento
-
-O orçamento de referência do projeto é o `Daily Budget`:
-
-| Configuração | Valor |
+### 6.4 Resultado Athena
+| Métrica | Resultado |
 |---|---:|
-| Limite diário | US$ 10,00 |
-| Alerta de custo real | 85% |
-| Valor equivalente do alerta | US$ 8,50 por dia |
+| Qualidade | `PASS` |
+| Tabelas verificadas | 8 |
+| Registros contabilizados | 187.200 |
+| Registros streaming | 1 |
 
-O orçamento mensal preexistente de outro curso não é utilizado como referência de custo deste projeto.
+Identificador da consulta final:
 
-### Custos observados e cuidados
+`94a4e66c-83d8-459a-baef-41777bfd36ce`
 
-Uma consulta ao AWS Cost Explorer em outubro de 2026 retornou valores praticamente nulos para os serviços consultados no período. A informação é apenas uma observação pontual, sujeita a atraso de atualização, e **não representa garantia de custo zero**.
+A consulta terminou com `SUCCEEDED`, e seus resultados foram lidos corretamente pela Step Functions.
 
-S3, Glue, Lambda, SQS, Step Functions, Athena, CloudWatch e SNS podem gerar custos conforme região, armazenamento, requisições, duração do processamento, logs, métricas, transições e bytes escaneados. Consulte [`docs/finops.md`](docs/finops.md) e a [AWS Pricing Calculator](https://calculator.aws/) para mensuração e projeção. Não preencha estimativas com quantidades ou preços que não tenham sido medidos/consultados.
+### 6.5 Estado do catálogo em 03/11/2026
 
-Medidas de controle aplicadas:
+Após a aplicação do ajuste de profundidade dos Crawlers, Silver e Gold foram rastreadas novamente com status `SUCCEEDED`. O catálogo passou a conter 16 tabelas principais e nenhuma entrada redundante `run_id_*`. A limpeza removeu somente 24 definições de metadados antigos do Glue Data Catalog; os arquivos Parquet e demais objetos no S3 foram preservados.
 
-- Glue 4.0 com dois workers G.1X e timeout de 30 minutos na configuração implantada.
-- Agendamento diário desativado por padrão.
-- SQS Standard e Lambda acionada por eventos, sem consumidor em servidor permanente.
-- Consultas Athena com seleção de colunas e filtros por partição.
-- Histórico S3 com ciclo de vida para versões não correntes.
-- Destruição dos recursos de demonstração após coletar as evidências necessárias.
+### 6.6 Evidência de correção
+O primeiro teste completo processou os dados corretamente e obteve `PASS` no Athena, mas terminou como `FAILED` porque a etapa `GetGoldValidationResults` utilizava um JSONPath incorreto.
 
-## 12. Próximas evoluções: análise e IA
+A correção foi aplicada na definição da máquina de estados. O novo plano Terraform apresentou somente uma atualização in-place da Step Functions, sem criação, destruição ou alteração da Lambda.
 
-As tabelas Gold podem servir como base para estudos futuros de risco de não atingimento de metas por município e ano. Caminhos possíveis:
+Na execução seguinte, o resultado Athena foi recuperado corretamente e a máquina de estados terminou como `SUCCEEDED`.
 
-- Análise exploratória e identificação de padrões regionais.
-- Agrupamento de municípios por características e evolução do indicador.
-- Modelos de regressão ou árvores para previsão do indicador municipal.
-- Classificação de risco, com validação temporal e métricas adequadas.
+## 7. Qualidade de dados e limitações
+O Quality Gate é executado antes da publicação das camadas analíticas. Entre as regras implementadas estão:
 
-A versão atual **não treina nem publica um modelo preditivo**. Antes de desenvolver modelos, é necessário definir claramente a data de previsão e eliminar vazamento de informação: a taxa que se deseja prever, ou uma coluna derivada dela no mesmo ano-alvo, não deve ser utilizada como variável explicativa.
+- Presença de tabelas e colunas obrigatórias.
 
-## 13. Estrutura do repositório
+- Verificação de chaves nulas.
 
-```text
-Tech-Challenge-Pipeline-Fase-2/
-├── cloud/
-│   ├── lambda/                       # Consumidor SQS -> S3
-│   └── terraform/                    # Infraestrutura AWS como código
-├── config/                           # Configurações e exemplos de mapeamento
-├── data/
-│   ├── events/                       # Eventos sintéticos de demonstração
-│   ├── exports_raw/                  # Dicionário e inventário; ZIP não versionado
-│   ├── source/                       # CSVs canônicos preparados localmente
-│   └── ...                           # Bronze/Silver/Gold locais ignorados pelo Git
-├── docs/
-│   ├── architecture.md               # Decisões e arquitetura
-│   ├── deploy_aws.md                 # Guia de implantação AWS
-│   ├── dicionario_dados.md           # Dicionário e esquemas
-│   ├── evidencias_execucao.md        # Registro de evidências AWS/local
-│   ├── evidencias_execucao_local.md  # Evidências da execução local
-│   ├── finops.md                     # Medição e projeção de custos
-│   ├── glue_catalog.md               # Diagnóstico e validação do Glue Data Catalog
-│   └── runbook.md                    # Diagnóstico e recuperação
-├── jobs/
-│   └── glue_medallion_job.py         # Job AWS Glue / PySpark
-├── scripts/                          # Preparação, validação, execução e manutenção
-├── src/alfabetiza_pipeline/          # Pipeline local: ingestão, transformação e qualidade
-├── tests/                             # Testes automatizados e fixtures
-├── .env.example                      # Exemplo de variáveis de ambiente
-├── .gitignore
-├── Makefile
-├── pyproject.toml
-└── README.md
+- Duplicidade de chaves naturais.
+
+- Percentuais e metas no intervalo permitido.
+
+- Validade de presença, alfabetização e peso amostral.
+
+- Taxas mínimas de correspondência entre tabelas.
+
+- Validação e deduplicação de eventos.
+
+Foram documentados testes positivos e negativos. Nas execuções negativas com duplicidade da chave natural municipal, o Glue terminou em `FAILED` e impediu a publicação das saídas Silver e Gold daquela execução.
+
+### Limitações que devem acompanhar a interpretação dos resultados
+**Microdados:** a execução histórica leu 1.048.575 registros de alunos. Esse número coincide com o limite de linhas de dados de uma planilha Excel, considerando uma linha adicional de cabeçalho. É um alerta de possível truncamento, mas não prova perda de registros. A completude deve ser confirmada com a fonte original.
+
+**Cobertura de metas:** metas municipais não estão disponíveis ou não possuem correspondência para todos os recortes. Na validação histórica da fato municipal, 18.763 registros não possuíam uma meta municipal preenchida. Ausência de meta não significa meta não atingida.
+
+**Cobertura temporal:** a tabela municipal de metas disponível inicia em 2024; portanto, registros de 2023 não podem ser comparados com uma meta municipal dessa tabela. Também foram identificadas lacunas de correspondência em 2024 e valores de meta vazios na própria fonte.
+
+**Streaming:** o registro de streaming da execução final é demonstrativo e sintético. Não representa atualização oficial em tempo real do indicador de alfabetização.
+
+**Indicador temporal:** a média simples municipal é uma métrica descritiva não ponderada. Não substitui o indicador oficial nacional.
+
+**Modelos preditivos:** a versão atual não treina nem publica um modelo de Machine Learning. As tabelas Gold podem servir de base para estudos futuros, desde que sejam definidos o horizonte de previsão e os controles contra vazamento de informação.
+
+## 8. Infraestrutura como código e atualização Terraform
+A infraestrutura é declarada em `cloud/terraform/`.
+
+Na atualização de 02/11/2026, foram aplicadas duas revisões Terraform:
+
+**Primeira aplicação:**
+| Recurso | Alteração |
+|---|---|
+| `aws_iam_role_policy.step_functions` | Inclusão das permissões necessárias à nova orquestração. |
+| `aws_s3_object.glue_script` | Publicação do script Glue com suporte ao `--RUN_ID`. |
+| `aws_sfn_state_machine.pipeline` | Integração dos crawlers, reparos e validação Athena. |
+
+Resultado: `0 added, 3 changed, 0 destroyed`.
+
+**Segunda aplicação:**
+| Recurso | Alteração |
+|---|---|
+| `aws_sfn_state_machine.pipeline` | Correção do JSONPath da resposta Athena. |
+
+Resultado: `0 added, 1 changed, 0 destroyed`.
+
+A Lambda de streaming não foi atualizada nessas aplicações. A divergência de hash do pacote local foi investigada e identificada como diferença de terminações de linha (`CRLF` no Windows e `LF` no pacote da AWS). A normalização permitiu gerar um plano sem atualização da Lambda.
+
+Validações realizadas:
+
+- `terraform fmt -recursive`
+
+- `terraform validate`
+
+- `aws stepfunctions validate-state-machine-definition` sobre a definição renderizada pelo plano Terraform.
+
+A validação final da definição retornou `OK`, sem diagnósticos.
+
+**Segurança operacional:** o diretório original de gerenciamento contém o estado Terraform. O clone do GitHub não deve ser tratado como substituto desse estado. Não executar `terraform apply` a partir de um clone sem estado nem remover ou publicar o `terraform.tfstate`.
+
+## 9. Observabilidade e FinOps
+### 9.1 Monitoramento
+A arquitetura utiliza CloudWatch para logs, métricas e alarme de erro da Lambda, com notificações pelo SNS.
+
+Métricas customizadas documentadas:
+
+- `EventsIngested`
+
+- `InvalidEvents`
+
+- `EventLatencySeconds`
+
+Namespace:
+
+`AlfabetizacaoPipeline`
+
+O alarme da Lambda foi configurado com limiar de um erro e ações de notificação associadas ao SNS.
+
+### 9.2 Controle do streaming
+A análise FinOps identificou 20.779 recebimentos vazios de SQS em 29/10/2026 para apenas duas mensagens enviadas, recebidas e excluídas.
+
+Como a integração streaming é utilizada para testes e demonstrações, o Event Source Mapping foi definido para permanecer desabilitado por padrão fora dos períodos de teste.
+
+A fila SQS e a Lambda permanecem provisionadas. A habilitação deve ser temporária, seguida da confirmação do retorno ao estado `Disabled`.
+
+### 9.3 Medições financeiras
+A fotografia de custos de 1º a 29/10/2026 identificou:
+| Item | Medição histórica |
+|---|---:|
+| Armazenamento S3 versionado | 0,2564 GiB |
+| Glue — cinco execuções | 1.987 DPU-segundos |
+| Glue — cinco execuções | 0,551944 DPU-hora |
+| Athena — 13 consultas anteriores | 1.886.683 bytes verificados |
+| Recebimentos vazios SQS em 29/10 | 20.779 |
+
+As duas novas execuções Glue de 02/11/2026 reportaram:
+| Execução | DPUSeconds |
+|---|---:|
+| Primeiro teste completo (Glue concluído; orquestração falhou no JSONPath) | 642 |
+| Execução final ponta a ponta | 742 |
+| **Total adicional em 02/11** | **1.384** |
+
+Somando as cinco execuções registradas na fotografia anterior às duas execuções de validação de novembro, temos **3.371 DPU-segundos**, equivalentes a aproximadamente **0,9364 DPU-hora**.
+
+Usando apenas a taxa histórica de referência de US$ 0,44 por DPU-hora, isso corresponde a aproximadamente **US$ 0,412 de referência para as sete execuções Glue**. Não é valor de fatura e não inclui o custo dos crawlers nem os demais serviços.
+
+A consulta do Cost Explorer de outubro retornou `UnblendedCost = 0` nas linhas exibidas, mas os dados estavam marcados como estimados e agregados à conta/região. Portanto, não é correto afirmar que o custo total da arquitetura é zero.
+
+O AWS Budget documentado foi configurado com limite diário de US$ 10,00 e alerta em 85%, equivalente a US$ 8,50. O orçamento serve para monitoramento e notificação; não bloqueia automaticamente a utilização dos recursos.
+
+**Limitação da estimativa:** a fotografia de armazenamento S3 e a amostra de consultas Athena são históricas. O valor de US$ 0,412 considera apenas as sete execuções Glue contabilizadas e uma taxa de referência; não inclui crawlers nem os demais serviços. A extração do Cost Explorer estava marcada como estimada e agregada à conta/região, sem atribuição financeira completa ao projeto. Portanto, não há um custo mensal total definitivo da solução nesta documentação.
+
+## 10. Consultas de auditoria no Athena
+A consulta abaixo permite verificar a quantidade de registros de cada tabela Gold para a execução final.
+
+```sql
+
+SELECT 'fato_alfabetizacao_municipio' AS table_name, COUNT(*) AS row_count
+
+FROM fato_alfabetizacao_municipio
+
+WHERE run_id = 'd5095134-779d-453d-b55a-c67a020ca4f3'
+
+UNION ALL
+
+SELECT 'mart_alfabetizacao_uf', COUNT(*)
+
+FROM mart_alfabetizacao_uf
+
+WHERE run_id = 'd5095134-779d-453d-b55a-c67a020ca4f3'
+
+UNION ALL
+
+SELECT 'mart_evolucao_temporal', COUNT(*)
+
+FROM mart_evolucao_temporal
+
+WHERE run_id = 'd5095134-779d-453d-b55a-c67a020ca4f3'
+
+UNION ALL
+
+SELECT 'mart_acompanhamento_metas', COUNT(*)
+
+FROM mart_acompanhamento_metas
+
+WHERE run_id = 'd5095134-779d-453d-b55a-c67a020ca4f3'
+
+UNION ALL
+
+SELECT 'mart_streaming_eventos', COUNT(*)
+
+FROM mart_streaming_eventos
+
+WHERE run_id = 'd5095134-779d-453d-b55a-c67a020ca4f3'
+
+UNION ALL
+
+SELECT 'reconciliacao_microdados', COUNT(*)
+
+FROM reconciliacao_microdados
+
+WHERE run_id = 'd5095134-779d-453d-b55a-c67a020ca4f3'
+
+UNION ALL
+
+SELECT 'mart_trajetoria_metas', COUNT(*)
+
+FROM mart_trajetoria_metas
+
+WHERE run_id = 'd5095134-779d-453d-b55a-c67a020ca4f3'
+
+UNION ALL
+
+SELECT 'mart_perfil_proficiencia', COUNT(*)
+
+FROM mart_perfil_proficiencia
+
+WHERE run_id = 'd5095134-779d-453d-b55a-c67a020ca4f3'
+
+ORDER BY table_name;
+
 ```
 
-## 14. Documentação complementar
+Essa consulta complementa a validação agregada, permitindo registrar a contagem individual de cada produto Gold na evidência da entrega.
 
-- [Arquitetura e decisões técnicas](docs/architecture.md)
-- [Guia de implantação na AWS](docs/deploy_aws.md)
-- [Dicionário de dados](docs/dicionario_dados.md)
-- [Registro de evidências](docs/evidencias_execucao.md)
-- [Evidências da execução local](docs/evidencias_execucao_local.md)
-- [FinOps — custos e projeções](docs/finops.md)
-- [Glue Data Catalog — crawlers, partições e limpeza segura](docs/glue_catalog.md)
-- [Runbook — diagnóstico e recuperação](docs/runbook.md)
-- [Inventário dos dados de origem](data/exports_raw/LEIA-ME.md)
+## 11. Estrutura do repositório
+```text
 
-## 15. Referências
+Tech-Challenge-Pipeline-Fase-2/
 
-- [Base dos Dados — Avaliação da Alfabetização](https://basedosdados.org/dataset/073a39d4-89cf-4068-b1e8-34ed0d9c0b72)
-- [Inep — Avaliação da Alfabetização](https://www.gov.br/inep/pt-br/areas-de-atuacao/avaliacao-e-exames-educacionais/avaliacao-da-alfabetizacao)
-- [AWS Pricing Calculator](https://calculator.aws/)
-- [Amazon S3 Pricing](https://aws.amazon.com/s3/pricing/)
-- [AWS Glue Pricing](https://aws.amazon.com/glue/pricing/)
-- [Amazon Athena Pricing](https://aws.amazon.com/athena/pricing/)
-- [Amazon SQS Pricing](https://aws.amazon.com/sqs/pricing/)
-- [AWS Lambda Pricing](https://aws.amazon.com/lambda/pricing/)
+├── cloud/
 
-## 16. Vídeo executivo
+│   ├── lambda/
 
-**Link do vídeo:** adicionar após a gravação e publicação.
+│   │   └── stream_to_s3.py
 
-O vídeo deve apresentar, em até cinco minutos, o problema, a arquitetura, a ingestão batch e streaming, as camadas medalhão, as verificações de qualidade, os resultados reais da execução AWS, as limitações dos dados e as medidas de FinOps. Não apresente eventos simulados como indicadores oficiais nem resultados locais como se fossem execução AWS.
+│   └── terraform/
+
+│       ├── main.tf
+
+│       ├── state_machine.asl.json.tftpl
+
+│       └── variables.tf
+
+├── config/
+
+├── data/
+
+│   ├── events/
+
+│   ├── exports_raw/
+
+│   ├── source/
+
+│   └── observability/
+
+├── docs/
+│   ├── apresentacao/                 # PowerPoint e PDF da apresentação executiva
+│   ├── evidencias/
+│   │   └── aws/                       # Evidências visuais da infraestrutura
+
+│   ├── architecture.md
+
+│   ├── deploy_aws.md
+
+│   ├── dicionario_dados.md
+
+│   ├── evidencias_execucao.md
+
+│   ├── finops.md
+
+│   └── runbook.md
+
+├── jobs/
+
+│   └── glue_medallion_job.py
+
+├── scripts/
+
+│   └── run_aws_pipeline.py
+
+├── src/
+
+│   └── alfabetiza_pipeline/
+
+├── tests/
+
+├── README.md
+
+├── pyproject.toml
+
+└── Makefile
+
+```
+
+Dados completos de origem, arquivos locais de execução e artefatos sensíveis de infraestrutura não devem ser publicados no Git.
+
+## 12. Vídeo e apresentação executiva
+
+O vídeo executivo foi publicado no YouTube e apresenta o problema, o fluxo da solução, a ingestão batch e por eventos, a organização das camadas, as evidências de execução, as limitações conhecidas e o potencial de uso analítico/IA.
+
+- **Vídeo:** [Assistir no YouTube](https://youtu.be/9-dUN78Z7yM)
+- **Apresentação:** [Pasta docs/apresentacao](docs/apresentacao/)
+- **Evidências AWS:** [Pasta docs/evidencias/aws](docs/evidencias/aws/)
+
+Os eventos de streaming mostrados são sintéticos e não devem ser apresentados como atualizações oficiais do indicador. 
+
+## 13. Checklist de encerramento da entrega
+
+### Implementação e validação concluídas
+
+- [x] Pipeline batch implantada e executada na AWS.
+- [x] Arquivos de origem preservados na Bronze (`raw_exports/` e `source/`).
+- [x] Camadas Bronze, Silver e Gold processadas.
+- [x] Glue Job concluído com `SUCCEEDED`.
+- [x] Crawlers Silver e Gold concluídos com `SUCCEEDED`.
+- [x] Reparo de partições e Quality Gate Athena executados na orquestração.
+- [x] Oito tabelas Gold verificadas com resultado `PASS`.
+- [x] Step Functions finalizada com `SUCCEEDED` na execução integrada de 02/11/2026.
+- [x] Catálogo corrigido em 03/11/2026 para 16 tabelas principais (oito Silver e oito Gold).
+- [x] Ingestão de eventos sintéticos testada até a tabela analítica.
+- [x] Monitoramento, retenção de logs e medições FinOps documentados.
+- [x] Vídeo executivo publicado no YouTube.
+- [x] Apresentação executiva adicionada à pasta `docs/apresentacao/`.
+
+
+## 14. Conclusão
+A solução demonstra uma pipeline híbrida de dados para análise da alfabetização, com processamento batch, ingestão demonstrativa de eventos, arquitetura Medallion, catálogo analítico, consultas, verificações de qualidade, observabilidade e infraestrutura como código.
+
+A principal evolução da última etapa foi a integração de todo o ciclo operacional na Step Functions: processamento Glue, atualização dos crawlers, reparo de partições, validação Athena e Quality Gate final.
+
+A execução de 02/11/2026 confirmou o funcionamento ponta a ponta, com oito tabelas verificadas, 187.200 linhas somadas na validação e resultado `PASS`, encerrando a máquina de estados com `SUCCEEDED`. Em 03/11/2026, o catálogo foi corrigido e validado com 16 tabelas principais.
+
+As limitações das fontes, a natureza sintética dos eventos e as ressalvas da análise financeira permanecem documentadas para garantir uma apresentação tecnicamente transparente e reproduzível.
